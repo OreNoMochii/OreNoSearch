@@ -112,8 +112,14 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cu_location_trgm
     ON candidates_upgraded USING GIN (location gin_trgm_ops);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cu_company_trgm
-    ON candidates_upgraded USING GIN (current_company gin_trgm_ops);
+-- NOT created: a trigram index on current_company.
+-- The only predicate the application uses against that column is
+--   current_company NOT ILIKE $n
+-- and a negated match can never use an index. The index was built, measured
+-- over real traffic (2 scans, both from manual verification queries), and
+-- dropped: it cost 266 MB plus write amplification on every insert and update
+-- for no read benefit. Add it back only if a positive ILIKE on that column
+-- appears.
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cu_latest_role_trgm
     ON candidates_upgraded USING GIN (latest_role gin_trgm_ops);

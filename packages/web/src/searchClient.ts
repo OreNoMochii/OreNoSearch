@@ -109,7 +109,7 @@ class RankCounter {
 // why the client had to carry an admin-grade key. It now runs once on the
 // server at startup instead.
 
-function parseExperienceYears(expStr?: string): number {
+export function parseExperienceYears(expStr?: string): number {
   if (!expStr) return 0;
 
   const text = expStr.toLowerCase();
@@ -197,7 +197,7 @@ async function gatherTermSets(
   return Promise.all(promises);
 }
 
-function combineSets(
+export function combineSets(
   shouldSets: Set<string>[],
   mustSets: Set<string>[],
   mustNotSets: Set<string>[],

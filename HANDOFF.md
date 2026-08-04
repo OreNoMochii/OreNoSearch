@@ -38,25 +38,27 @@ its claims are false:
 
 `DEPLOYMENT.md` is accurate; the README predates several restructures.
 
-### 2. Trigram index is built but the planner ignores it
+### 2. ~~Trigram index~~ — RESOLVED
 
-`location ILIKE '%Tokyo%'` still chooses a parallel sequential scan despite
-`idx_cu_location_trgm` existing. Verify with:
+Measured rather than assumed. The indexes work correctly; the earlier reading
+was wrong because it tested only one non-selective predicate.
 
-```sql
-EXPLAIN (ANALYZE) SELECT count(*) FROM candidates_upgraded WHERE location ILIKE '%Tokyo%';
-```
+| Predicate                            | Rows matched    | Planner choice                                               |
+| ------------------------------------ | --------------- | ------------------------------------------------------------ |
+| `location ILIKE '%Tokyo%'`           | 584,802 (10.3%) | seq scan — **correct**, index cannot win at that selectivity |
+| `current_company ILIKE '%Rakuten%'`  | 6,993 (0.12%)   | Bitmap Index Scan                                            |
+| `latest_role ILIKE '%Neurosurgeon%'` | 85              | Bitmap Index Scan                                            |
 
-Likely causes to check in order: the predicate matches too large a fraction of
-5.6M rows for an index path to win; `gin_trgm_ops` needs `pg_trgm.similarity_threshold`
-tuning; or `random_page_cost` is defaulted for spinning disks. If the planner
-is right that a seq scan is cheaper at this selectivity, drop the three trigram
-indexes — they cost 667 MB combined and buy nothing.
+On a selective predicate the index gives **2,866 ms -> 10 ms (285x)**.
 
-Related, measured honestly: `idx_cu_total_exp_months` **is** used (Bitmap Index
-Scan) but only improved a broad-range query from 209s to 154s (26%). The
-`Recheck Cond` re-evaluates the function per heap row. It will help selective
-ranges far more than broad ones.
+`idx_cu_company_trgm` was dropped after measurement: the application only uses
+`current_company NOT ILIKE`, a negated match that can never use an index. Its
+2 recorded scans were manual verification queries. Reclaimed 266 MB plus write
+amplification. Migration 003 documents why it is not recreated.
+
+Retained and confirmed used: `idx_cu_location_trgm` (20 scans),
+`idx_cu_total_exp_months` (7), `idx_cu_latest_role_trgm` (1, serves the
+`currentRoleKeywords` filter).
 
 ### 3. Finish the UI consolidation (§4 remainder)
 
