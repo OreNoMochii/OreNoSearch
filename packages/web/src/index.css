@@ -97,6 +97,7 @@ button {
 textarea,
 input[type='number'],
 input[type='text'] {
+  width: 100%;
   background: var(--surface-input);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
