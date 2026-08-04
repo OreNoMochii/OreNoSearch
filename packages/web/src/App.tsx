@@ -761,13 +761,19 @@ function App() {
                         onClick={() => removeGroup(i)}
                         style={{
                           position: 'absolute',
-                          top: '0.75rem',
-                          right: '0.75rem',
+                          top: '0.5rem',
+                          right: '0.5rem',
                           background: 'rgba(239, 68, 68, 0.15)',
                           color: '#ef4444',
                           border: 'none',
                           borderRadius: '50%',
-                          padding: '0.4rem',
+                          width: '28px',
+                          height: '28px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                          cursor: 'pointer',
                           cursor: 'pointer',
                         }}
                       >
