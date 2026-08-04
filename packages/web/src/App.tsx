@@ -452,7 +452,7 @@ function App() {
 
         <main
           id="main-content"
-          className="main-grid"
+          className={totalMatches === null ? "single-column-centered" : "main-grid"}
         >
           <motion.div
             className="glass-panel"
