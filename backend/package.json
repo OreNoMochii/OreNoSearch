@@ -1,0 +1,50 @@
+{
+  "name": "metaview_scraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/main.ts",
+  "scripts": {
+    "orchestrate": "ts-node src/main.ts",
+    "scrape": "ts-node src/scraper.ts",
+    "outreach": "ts-node src/outreach_agent.ts",
+    "api-server": "ts-node src/main.ts",
+    "sync-meili": "ts-node src/sync_meili.ts",
+    "backfill-roles": "ts-node src/backfill_latest_roles.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/minimist": "^1.2.5",
+    "@types/nodemailer": "^8.0.0",
+    "@types/p-limit": "^2.1.0",
+    "cors": "^2.8.6",
+    "csv-parse": "^6.2.1",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "googleapis": "^173.0.0",
+    "jsonrepair": "^3.14.0",
+    "meilisearch": "^0.57.0",
+    "minimist": "^1.2.8",
+    "nodemailer": "^8.0.5",
+    "openai": "^6.34.0",
+    "p-limit": "^3.1.0",
+    "playwright": "^1.59.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/dotenv": "^6.1.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.2",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.20.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}

@@ -1,0 +1,4 @@
+dspy-ai==2.4.9
+pandas
+openai
+python-dotenv

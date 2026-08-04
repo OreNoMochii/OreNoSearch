@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: metaview_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-scraper_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-scraper_password}
+      POSTGRES_DB: ${DB_NAME:-metaview_scraper}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # ── New: Vector Search DB (isolated from golden DB) ──────────────────────
+  pgvector_search:
+    image: pgvector/pgvector:pg15
+    container_name: metaview_vectordb
+    environment:
+      POSTGRES_USER: ${VECTOR_DB_USER:-vector_user}
+      POSTGRES_PASSWORD: ${VECTOR_DB_PASSWORD:-vector_password}
+      POSTGRES_DB: ${VECTOR_DB_NAME:-metaview_vectors}
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    restart: unless-stopped
+  # ─────────────────────────────────────────────────────────────────────────
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: meilisearch
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_KEY:?MEILI_KEY must be set in .env}
+      - MEILI_ENV=development
+      - MEILI_NO_ANALYTICS=true
+    ports:
+      - "7705:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin4_container
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  pgvector_data:
+  meilisearch_data:

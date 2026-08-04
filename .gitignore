@@ -1,0 +1,87 @@
+# ─── Dependencies & build output ────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+hf_env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Secrets — NEVER commit these ───────────────────────────────────────────
+# Note: .env.example IS tracked, as a documented template with no values.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+token.json
+credentials.json
+service-account*.json
+secrets/
+
+# ─── Runtime output (scoped paths, not blanket extensions) ──────────────────
+# The previous .gitignore used bare *.txt / *.sql / *.svg, which silently
+# excluded required sources such as requirements.txt, setup_pgvector.sql,
+# src/migrations/ and the app favicon. Ignore locations, not file types.
+*.log
+logs/
+.metaview_state.json
+dom_analysis.json
+/coverage/
+/backend/generated_outreach_emails.csv
+/backend/generated_outreach_emails.txt
+/backend/skipped_candidates.log
+/machine_learning/*_log*.txt
+/machine_learning/exit_code*.txt
+/machine_learning/extract_exit_code.txt
+/machine_learning/out.txt
+/machine_learning/pipeline_output.txt
+/machine_learning/inference_output.json
+/machine_learning/src/pipeline_results_fixed.txt
+
+# ─── Scratch / one-shot developer scripts ───────────────────────────────────
+/machine_learning/scratch/
+/scratch/
+scratch_*.js
+explain_search.js
+search_db.js
+test_api.js
+test_search.js
+test_search.ts
+query_candidates*.js
+list_tables.js
+
+# ─── Databases & dumps ──────────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# ─── OS & editor ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Keep shared editor config, ignore personal overrides
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
