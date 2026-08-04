@@ -29,11 +29,17 @@ export class ScoringUnavailableError extends Error {
 }
 
 export class HttpRiskScorer implements RiskScorer {
-  constructor(private readonly baseUrl: string, private readonly timeoutMs: number) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number,
+  ) {}
 
-  async score(profileUrls: readonly string[], jdText: string): Promise<ReadonlyMap<string, RiskScore>> {
+  async score(
+    profileUrls: readonly string[],
+    jdText: string,
+  ): Promise<ReadonlyMap<string, RiskScore>> {
     if (profileUrls.length === 0) return new Map();
-    
+
     // Explicit Node fetch call
     const res = await fetch(`${this.baseUrl}/score`, {
       method: 'POST',
@@ -41,12 +47,14 @@ export class HttpRiskScorer implements RiskScorer {
       body: JSON.stringify({ profile_urls: profileUrls, jd_text: jdText }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    
+
     if (!res.ok) throw new ScoringUnavailableError(`Scoring service returned ${res.status}`);
-    
+
     const parsed = ScoringResponse.safeParse(await res.json());
     if (!parsed.success) throw new ScoringUnavailableError('Malformed scoring response');
-    
-    return new Map(Object.entries(parsed.data.scored_candidates).map(([k, v]) => [k, toRiskScore(v)]));
+
+    return new Map(
+      Object.entries(parsed.data.scored_candidates).map(([k, v]) => [k, toRiskScore(v)]),
+    );
   }
 }

@@ -774,7 +774,6 @@ function App() {
                           justifyContent: 'center',
                           padding: 0,
                           cursor: 'pointer',
-                          cursor: 'pointer',
                         }}
                       >
                         <X size={16} />

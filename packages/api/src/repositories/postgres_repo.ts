@@ -11,17 +11,17 @@ import { logError } from '../utils/logger';
  * up. statement_timeout bounds that server-side.
  */
 export const pool = new Pool({
-    host: config.DB_HOST,
-    port: config.DB_PORT,
-    database: config.DB_NAME,
-    user: config.DB_USER,
-    password: config.DB_PASSWORD,
-    max: config.DB_POOL_MAX,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
-    statement_timeout: config.DB_STATEMENT_TIMEOUT_MS,
-    query_timeout: config.DB_STATEMENT_TIMEOUT_MS,
-    application_name: 'metaview-api',
+  host: config.DB_HOST,
+  port: config.DB_PORT,
+  database: config.DB_NAME,
+  user: config.DB_USER,
+  password: config.DB_PASSWORD,
+  max: config.DB_POOL_MAX,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  statement_timeout: config.DB_STATEMENT_TIMEOUT_MS,
+  query_timeout: config.DB_STATEMENT_TIMEOUT_MS,
+  application_name: 'metaview-api',
 });
 
 // An idle client erroring out (server restart, network blip) emits on the pool.
@@ -30,30 +30,30 @@ pool.on('error', (err) => logError('pg_pool_error', err));
 
 /** Drains the pool during graceful shutdown. */
 export async function shutdownPool(): Promise<void> {
-    await pool.end();
+  await pool.end();
 }
 
 export interface Candidate {
-    name: string;
-    profile_url: string;
-    headline?: string;
-    location?: string;
-    current_company?: string;
-    summary?: string;
-    email?: string;
-    phone_number?: string;
-    experience?: string;
-    latest_role?: string;
-    education?: string;
-    skills?: string;
-    language?: string;
-    licenses?: string;
+  name: string;
+  profile_url: string;
+  headline?: string;
+  location?: string;
+  current_company?: string;
+  summary?: string;
+  email?: string;
+  phone_number?: string;
+  experience?: string;
+  latest_role?: string;
+  education?: string;
+  skills?: string;
+  language?: string;
+  licenses?: string;
 }
 
 export async function initDb() {
-    const client = await pool.connect();
-    try {
-        const queryText = `
+  const client = await pool.connect();
+  try {
+    const queryText = `
       CREATE TABLE IF NOT EXISTS candidates (
         name VARCHAR(255) NOT NULL,
         profile_url VARCHAR(500) NOT NULL,
@@ -139,17 +139,17 @@ export async function initDb() {
       END;
       $$ LANGUAGE plpgsql IMMUTABLE;
     `;
-        await client.query(queryText);
-        console.log('Database initialized successfully.');
-    } finally {
-        client.release();
-    }
+    await client.query(queryText);
+    console.log('Database initialized successfully.');
+  } finally {
+    client.release();
+  }
 }
 
 export async function saveCandidate(candidate: Candidate) {
-    const client = await pool.connect();
-    try {
-        const queryText = `
+  const client = await pool.connect();
+  try {
+    const queryText = `
       INSERT INTO candidates (
         name, profile_url, headline, location, current_company, summary,
         email, phone_number, experience, latest_role, education, skills, 
@@ -172,47 +172,47 @@ export async function saveCandidate(candidate: Candidate) {
         licenses = EXCLUDED.licenses,
         scraped_at = CURRENT_TIMESTAMP;
     `;
-        const values = [
-            candidate.name,
-            candidate.profile_url,
-            candidate.headline,
-            candidate.location,
-            candidate.current_company,
-            candidate.summary,
-            candidate.email,
-            candidate.phone_number,
-            candidate.experience,
-            candidate.latest_role,
-            candidate.education,
-            candidate.skills,
-            candidate.language,
-            candidate.licenses,
-        ];
-        await client.query(queryText, values);
-    } finally {
-        client.release();
-    }
+    const values = [
+      candidate.name,
+      candidate.profile_url,
+      candidate.headline,
+      candidate.location,
+      candidate.current_company,
+      candidate.summary,
+      candidate.email,
+      candidate.phone_number,
+      candidate.experience,
+      candidate.latest_role,
+      candidate.education,
+      candidate.skills,
+      candidate.language,
+      candidate.licenses,
+    ];
+    await client.query(queryText, values);
+  } finally {
+    client.release();
+  }
 }
 
 export async function hasCandidateBeenSent(
-    profileUrl: string,
-    emails: string[],
-    companyName: string,
+  profileUrl: string,
+  emails: string[],
+  companyName: string,
 ): Promise<boolean> {
-    if (!emails || emails.length === 0) return false;
+  if (!emails || emails.length === 0) return false;
 
-    const client = await pool.connect();
-    try {
-        const query = `
+  const client = await pool.connect();
+  try {
+    const query = `
       SELECT 1 FROM outreach_history 
       WHERE profile_url = $1 AND company_name = $2 AND recipient_email = ANY($3)
       LIMIT 1
     `;
-        const res = await client.query(query, [profileUrl, companyName, emails]);
-        return (res.rowCount ?? 0) > 0;
-    } finally {
-        client.release();
-    }
+    const res = await client.query(query, [profileUrl, companyName, emails]);
+    return (res.rowCount ?? 0) > 0;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -226,63 +226,62 @@ export async function hasCandidateBeenSent(
  * @returns the number of rows actually inserted (conflicts are skipped).
  */
 export async function logOutreachSent(
-    profileUrls: readonly string[],
-    emails: readonly string[],
-    companyName: string,
-    jobName: string,
+  profileUrls: readonly string[],
+  emails: readonly string[],
+  companyName: string,
+  jobName: string,
 ): Promise<number> {
-    const urls = profileUrls.filter((u) => u && u !== 'N/A');
-    if (urls.length === 0 || emails.length === 0) return 0;
+  const urls = profileUrls.filter((u) => u && u !== 'N/A');
+  if (urls.length === 0 || emails.length === 0) return 0;
 
-    const client = await pool.connect();
-    try {
-        const res = await client.query(
-            `INSERT INTO outreach_history (profile_url, recipient_email, company_name, job_name)
+  const client = await pool.connect();
+  try {
+    const res = await client.query(
+      `INSERT INTO outreach_history (profile_url, recipient_email, company_name, job_name)
        SELECT u.url, e.email, $3, $4
        FROM   unnest($1::text[]) AS u(url)
        CROSS  JOIN unnest($2::text[]) AS e(email)
        ON CONFLICT (profile_url, recipient_email, company_name) DO NOTHING`,
-            [[...urls], [...emails], companyName, jobName],
-        );
-        return res.rowCount ?? 0;
-    } finally {
-        client.release();
-    }
+      [[...urls], [...emails], companyName, jobName],
+    );
+    return res.rowCount ?? 0;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getSentCandidatesBatch(
-    profileUrls: string[],
-    emails: string[],
-    companyName: string,
+  profileUrls: string[],
+  emails: string[],
+  companyName: string,
 ): Promise<Set<string>> {
-    if (!profileUrls || profileUrls.length === 0 || !emails || emails.length === 0)
-        return new Set();
+  if (!profileUrls || profileUrls.length === 0 || !emails || emails.length === 0) return new Set();
 
-    const client = await pool.connect();
-    try {
-        const query = `
+  const client = await pool.connect();
+  try {
+    const query = `
             SELECT DISTINCT profile_url FROM outreach_history 
             WHERE profile_url = ANY($1) AND company_name = $2 AND recipient_email = ANY($3)
         `;
-        const res = await client.query(query, [profileUrls, companyName, emails]);
-        const sentUrls = new Set<string>();
-        res.rows.forEach((row) => sentUrls.add(row.profile_url));
-        return sentUrls;
-    } finally {
-        client.release();
-    }
+    const res = await client.query(query, [profileUrls, companyName, emails]);
+    const sentUrls = new Set<string>();
+    res.rows.forEach((row) => sentUrls.add(row.profile_url));
+    return sentUrls;
+  } finally {
+    client.release();
+  }
 }
 
 export async function saveScreeningResult(
-    profileUrl: string,
-    companyName: string,
-    jobName: string,
-    verdict: 'PASS' | 'REJECT',
-    reasoning?: string,
+  profileUrl: string,
+  companyName: string,
+  jobName: string,
+  verdict: 'PASS' | 'REJECT',
+  reasoning?: string,
 ) {
-    const client = await pool.connect();
-    try {
-        const query = `
+  const client = await pool.connect();
+  try {
+    const query = `
             INSERT INTO screening_results (profile_url, company_name, job_name, verdict, reasoning)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (profile_url, company_name, job_name) DO UPDATE SET
@@ -290,44 +289,44 @@ export async function saveScreeningResult(
                 reasoning = EXCLUDED.reasoning,
                 screened_at = CURRENT_TIMESTAMP
         `;
-        await client.query(query, [profileUrl, companyName, jobName, verdict, reasoning || null]);
-    } finally {
-        client.release();
-    }
+    await client.query(query, [profileUrl, companyName, jobName, verdict, reasoning || null]);
+  } finally {
+    client.release();
+  }
 }
 
 export async function getScreenedCandidatesBatch(
-    profileUrls: string[],
-    companyName: string,
-    jobName: string,
+  profileUrls: string[],
+  companyName: string,
+  jobName: string,
 ): Promise<Map<string, 'PASS' | 'REJECT'>> {
-    const result = new Map<string, 'PASS' | 'REJECT'>();
-    if (!profileUrls || profileUrls.length === 0) return result;
+  const result = new Map<string, 'PASS' | 'REJECT'>();
+  if (!profileUrls || profileUrls.length === 0) return result;
 
-    const client = await pool.connect();
-    try {
-        const query = `
+  const client = await pool.connect();
+  try {
+    const query = `
             SELECT profile_url, verdict FROM screening_results
             WHERE profile_url = ANY($1) AND company_name = $2 AND job_name = $3
         `;
-        const res = await client.query(query, [profileUrls, companyName, jobName]);
-        for (const row of res.rows) {
-            result.set(row.profile_url, row.verdict as 'PASS' | 'REJECT');
-        }
-        return result;
-    } finally {
-        client.release();
+    const res = await client.query(query, [profileUrls, companyName, jobName]);
+    for (const row of res.rows) {
+      result.set(row.profile_url, row.verdict as 'PASS' | 'REJECT');
     }
+    return result;
+  } finally {
+    client.release();
+  }
 }
 
 export interface CompanyIntel {
-    name: string;
-    company_type: string;
-    size_band: string;
-    reputation: string;
-    compensation: string;
-    flight_risk: string;
-    flight_note: string;
+  name: string;
+  company_type: string;
+  size_band: string;
+  reputation: string;
+  compensation: string;
+  flight_risk: string;
+  flight_note: string;
 }
 
 /**
@@ -336,53 +335,53 @@ export interface CompanyIntel {
  * Returns a Map keyed by lowercased company name for O(1) lookups.
  */
 export async function getCompanyIntelBatch(
-    companyNames: string[],
+  companyNames: string[],
 ): Promise<Map<string, CompanyIntel>> {
-    const result = new Map<string, CompanyIntel>();
-    if (!companyNames || companyNames.length === 0) return result;
+  const result = new Map<string, CompanyIntel>();
+  if (!companyNames || companyNames.length === 0) return result;
 
-    // Deduplicate and lowercase
-    const uniqueNames = [
-        ...new Set(companyNames.map((n) => n.trim().toLowerCase()).filter((n) => n.length > 0)),
-    ];
-    if (uniqueNames.length === 0) return result;
+  // Deduplicate and lowercase
+  const uniqueNames = [
+    ...new Set(companyNames.map((n) => n.trim().toLowerCase()).filter((n) => n.length > 0)),
+  ];
+  if (uniqueNames.length === 0) return result;
 
-    const client = await pool.connect();
-    try {
-        const query = `
+  const client = await pool.connect();
+  try {
+    const query = `
             SELECT name, company_type, size_band, reputation, compensation, flight_risk, flight_note
             FROM companies_analyzed
             WHERE lower(name) = ANY($1)
         `;
-        const res = await client.query(query, [uniqueNames]);
-        for (const row of res.rows) {
-            result.set(row.name.trim().toLowerCase(), {
-                name: row.name,
-                company_type: row.company_type || 'Unknown',
-                size_band: row.size_band || 'Unknown',
-                reputation: row.reputation || 'Unknown',
-                compensation: row.compensation || 'Unknown',
-                flight_risk: row.flight_risk || 'Unknown',
-                flight_note: row.flight_note || '',
-            });
-        }
-        return result;
-    } finally {
-        client.release();
+    const res = await client.query(query, [uniqueNames]);
+    for (const row of res.rows) {
+      result.set(row.name.trim().toLowerCase(), {
+        name: row.name,
+        company_type: row.company_type || 'Unknown',
+        size_band: row.size_band || 'Unknown',
+        reputation: row.reputation || 'Unknown',
+        compensation: row.compensation || 'Unknown',
+        flight_risk: row.flight_risk || 'Unknown',
+        flight_note: row.flight_note || '',
+      });
     }
+    return result;
+  } finally {
+    client.release();
+  }
 }
 
 export interface IlikeSearchParams {
-    andGroups: string[][]; // Each group: terms OR'd internally, groups AND'd externally
-    must: string[]; // Every term must appear (AND)
-    should: string[]; // At least one term must appear (OR)
-    mustNot: string[]; // None of these terms should appear
-    locations?: string[];
-    minExp?: number;
-    maxExp?: number;
-    excludeCompanies?: string[];
-    currentRoleKeywords?: string[];
-    limit: number;
+  andGroups: string[][]; // Each group: terms OR'd internally, groups AND'd externally
+  must: string[]; // Every term must appear (AND)
+  should: string[]; // At least one term must appear (OR)
+  mustNot: string[]; // None of these terms should appear
+  locations?: string[];
+  minExp?: number;
+  maxExp?: number;
+  excludeCompanies?: string[];
+  currentRoleKeywords?: string[];
+  limit: number;
 }
 
 /**
@@ -398,58 +397,58 @@ export interface IlikeSearchParams {
  * expression so both sides agree.
  */
 function toTsQueryPhrase(term: string): string {
-    const tokens = term
-        .toLowerCase()
-        .replace(/c\+\+/g, 'cpp_lang')
-        .replace(/c#/g, 'csharp_lang')
-        .replace(/\.net/g, 'dotnet_lang')
-        .replace(/f#/g, 'fsharp_lang')
-        .split(/[^a-z0-9_]+/)
-        .filter((t) => t.length > 0);
+  const tokens = term
+    .toLowerCase()
+    .replace(/c\+\+/g, 'cpp_lang')
+    .replace(/c#/g, 'csharp_lang')
+    .replace(/\.net/g, 'dotnet_lang')
+    .replace(/f#/g, 'fsharp_lang')
+    .split(/[^a-z0-9_]+/)
+    .filter((t) => t.length > 0);
 
-    if (tokens.length === 0) return '';
-    return tokens.map((t) => `'${t}'`).join(' <-> ');
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `'${t}'`).join(' <-> ');
 }
 
 export async function runIlikeSearch(params: IlikeSearchParams) {
-    const client = await pool.connect();
-    try {
-        const conditions: string[] = [];
-        const values: any[] = [];
-        let paramIndex = 1;
+  const client = await pool.connect();
+  try {
+    const conditions: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
 
-        const tsqueryParts: string[] = [];
+    const tsqueryParts: string[] = [];
 
-        // MUST terms (AND)
-        if (params.must && params.must.length > 0) {
-            const mustQueries = params.must.map(toTsQueryPhrase).filter(Boolean);
-            if (mustQueries.length > 0) tsqueryParts.push(`(${mustQueries.join(' & ')})`);
-        }
+    // MUST terms (AND)
+    if (params.must && params.must.length > 0) {
+      const mustQueries = params.must.map(toTsQueryPhrase).filter(Boolean);
+      if (mustQueries.length > 0) tsqueryParts.push(`(${mustQueries.join(' & ')})`);
+    }
 
-        // SHOULD terms (OR)
-        if (params.should && params.should.length > 0) {
-            const shouldQueries = params.should.map(toTsQueryPhrase).filter(Boolean);
-            if (shouldQueries.length > 0) tsqueryParts.push(`(${shouldQueries.join(' | ')})`);
-        }
+    // SHOULD terms (OR)
+    if (params.should && params.should.length > 0) {
+      const shouldQueries = params.should.map(toTsQueryPhrase).filter(Boolean);
+      if (shouldQueries.length > 0) tsqueryParts.push(`(${shouldQueries.join(' | ')})`);
+    }
 
-        // AND GROUPS
-        if (params.andGroups && params.andGroups.length > 0) {
-            for (const group of params.andGroups) {
-                if (group.length === 0) continue;
-                const groupQueries = group.map(toTsQueryPhrase).filter(Boolean);
-                if (groupQueries.length > 0) tsqueryParts.push(`(${groupQueries.join(' | ')})`);
-            }
-        }
+    // AND GROUPS
+    if (params.andGroups && params.andGroups.length > 0) {
+      for (const group of params.andGroups) {
+        if (group.length === 0) continue;
+        const groupQueries = group.map(toTsQueryPhrase).filter(Boolean);
+        if (groupQueries.length > 0) tsqueryParts.push(`(${groupQueries.join(' | ')})`);
+      }
+    }
 
-        // MUST NOT terms (NOT)
-        if (params.mustNot && params.mustNot.length > 0) {
-            const notQueries = params.mustNot.map(toTsQueryPhrase).filter(Boolean);
-            if (notQueries.length > 0) tsqueryParts.push(`!(${notQueries.join(' | ')})`);
-        }
+    // MUST NOT terms (NOT)
+    if (params.mustNot && params.mustNot.length > 0) {
+      const notQueries = params.mustNot.map(toTsQueryPhrase).filter(Boolean);
+      if (notQueries.length > 0) tsqueryParts.push(`!(${notQueries.join(' | ')})`);
+    }
 
-        if (tsqueryParts.length > 0) {
-            const finalTsQueryStr = tsqueryParts.join(' & ');
-            conditions.push(`
+    if (tsqueryParts.length > 0) {
+      const finalTsQueryStr = tsqueryParts.join(' & ');
+      conditions.push(`
                 to_tsvector('english', 
                   regexp_replace(
                     coalesce(name, '') || ' ' || 
@@ -462,73 +461,73 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
                   )
                 ) @@ to_tsquery('english', $${paramIndex})
             `);
-            values.push(finalTsQueryStr);
-            paramIndex++;
-        }
+      values.push(finalTsQueryStr);
+      paramIndex++;
+    }
 
-        // Location filter (ILIKE for region-level matching)
-        if (params.locations && params.locations.length > 0) {
-            const locConditions: string[] = [];
-            for (const loc of params.locations) {
-                const cleanLoc = loc.replace(/\s*\([^)]*\)/g, '').trim();
-                const parts = cleanLoc.split(/\s*\/\s*/).filter(Boolean);
-                for (const part of parts) {
-                    locConditions.push(`location ILIKE $${paramIndex}`);
-                    values.push(`%${part}%`);
-                    paramIndex++;
-                }
-            }
-            conditions.push(`(${locConditions.join(' OR ')})`);
+    // Location filter (ILIKE for region-level matching)
+    if (params.locations && params.locations.length > 0) {
+      const locConditions: string[] = [];
+      for (const loc of params.locations) {
+        const cleanLoc = loc.replace(/\s*\([^)]*\)/g, '').trim();
+        const parts = cleanLoc.split(/\s*\/\s*/).filter(Boolean);
+        for (const part of parts) {
+          locConditions.push(`location ILIKE $${paramIndex}`);
+          values.push(`%${part}%`);
+          paramIndex++;
         }
+      }
+      conditions.push(`(${locConditions.join(' OR ')})`);
+    }
 
-        // B14: reads the STORED generated column added by migration 002 rather
-        // than calling calculate_total_experience_months() per row, which forced
-        // a sequential scan over the whole table on every filtered search.
-        if (params.minExp !== undefined) {
-            conditions.push(`total_experience_months >= $${paramIndex}`);
-            values.push(params.minExp * 12);
-            paramIndex++;
-        }
+    // B14: reads the STORED generated column added by migration 002 rather
+    // than calling calculate_total_experience_months() per row, which forced
+    // a sequential scan over the whole table on every filtered search.
+    if (params.minExp !== undefined) {
+      conditions.push(`total_experience_months >= $${paramIndex}`);
+      values.push(params.minExp * 12);
+      paramIndex++;
+    }
 
-        if (params.maxExp !== undefined) {
-            conditions.push(`total_experience_months <= $${paramIndex}`);
-            values.push(params.maxExp * 12);
-            paramIndex++;
-        }
+    if (params.maxExp !== undefined) {
+      conditions.push(`total_experience_months <= $${paramIndex}`);
+      values.push(params.maxExp * 12);
+      paramIndex++;
+    }
 
-        if (params.excludeCompanies && params.excludeCompanies.length > 0) {
-            const excludeConditions = params.excludeCompanies.map(() => {
-                const clause = `current_company NOT ILIKE $${paramIndex}`;
-                paramIndex++;
-                return clause;
-            });
-            conditions.push(`(${excludeConditions.join(' AND ')})`);
-            for (const comp of params.excludeCompanies) {
-                values.push(`${comp}%`);
-            }
-        }
+    if (params.excludeCompanies && params.excludeCompanies.length > 0) {
+      const excludeConditions = params.excludeCompanies.map(() => {
+        const clause = `current_company NOT ILIKE $${paramIndex}`;
+        paramIndex++;
+        return clause;
+      });
+      conditions.push(`(${excludeConditions.join(' AND ')})`);
+      for (const comp of params.excludeCompanies) {
+        values.push(`${comp}%`);
+      }
+    }
 
-        if (params.currentRoleKeywords && params.currentRoleKeywords.length > 0) {
-            const roleConditions = params.currentRoleKeywords.map(() => {
-                const clause = `latest_role ILIKE $${paramIndex}`;
-                paramIndex++;
-                return clause;
-            });
-            conditions.push(`(${roleConditions.join(' OR ')})`);
-            for (const kw of params.currentRoleKeywords) {
-                values.push(`%${kw}%`);
-            }
-        }
+    if (params.currentRoleKeywords && params.currentRoleKeywords.length > 0) {
+      const roleConditions = params.currentRoleKeywords.map(() => {
+        const clause = `latest_role ILIKE $${paramIndex}`;
+        paramIndex++;
+        return clause;
+      });
+      conditions.push(`(${roleConditions.join(' OR ')})`);
+      for (const kw of params.currentRoleKeywords) {
+        values.push(`%${kw}%`);
+      }
+    }
 
-        let whereClause = '';
-        if (conditions.length > 0) {
-            whereClause = 'WHERE ' + conditions.join(' AND ');
-        }
+    let whereClause = '';
+    if (conditions.length > 0) {
+      whereClause = 'WHERE ' + conditions.join(' AND ');
+    }
 
-        // B14: `count(*) OVER ()` returns the unlimited match total alongside the
-        // page. The previous implementation ran the entire predicate a second
-        // time in a separate COUNT query, doubling the cost of every search.
-        const finalQuery = `
+    // B14: `count(*) OVER ()` returns the unlimited match total alongside the
+    // page. The previous implementation ran the entire predicate a second
+    // time in a separate COUNT query, doubling the cost of every search.
+    const finalQuery = `
             SELECT
                 profile_url as folder_id,
                 name as full_name,
@@ -546,28 +545,73 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
             LIMIT $${paramIndex}
         `;
 
-        const res = await client.query(finalQuery, [...values, params.limit]);
+    const res = await client.query(finalQuery, [...values, params.limit]);
 
-        const total = res.rows.length > 0 ? parseInt(res.rows[0].total_count, 10) : 0;
-        const hits = res.rows.map(({ total_count: _total, ...rest }) => rest);
+    const total = res.rows.length > 0 ? parseInt(res.rows[0].total_count, 10) : 0;
+    const hits = res.rows.map(({ total_count: _total, ...rest }) => rest);
 
-        return { hits, total };
-    } finally {
-        client.release();
-    }
+    return { hits, total };
+  } finally {
+    client.release();
+  }
 }
 
+/**
+ * Location list cache.
+ *
+ * B28: this was a permanent cache with no expiry and no invalidation hook, so
+ * regions added by scraping never appeared in the filter UI until the process
+ * was restarted. The aggregate is expensive (a full scan with a large CASE
+ * expression), so caching is right — it just needs a bound.
+ *
+ * A single in-flight promise is also tracked, so N concurrent cold requests
+ * issue one query rather than N.
+ */
+const LOCATION_CACHE_TTL_MS = 15 * 60_000;
+
 let cachedLocations: string[] | null = null;
+let cachedAt = 0;
+let inFlight: Promise<string[]> | null = null;
+
+/** Drops the cache. Call after a scrape or Meilisearch sync adds new regions. */
+export function invalidateLocationCache(): void {
+  cachedLocations = null;
+  cachedAt = 0;
+}
 
 export async function getAvailableLocations(): Promise<string[]> {
-    if (cachedLocations) {
-        return cachedLocations;
-    }
+  const fresh = cachedLocations !== null && Date.now() - cachedAt < LOCATION_CACHE_TTL_MS;
+  if (fresh) return cachedLocations!;
 
-    const client = await pool.connect();
-    try {
-        // Consolidated top-level regions (Tokyo, Kanagawa, Osaka, Singapore, etc.)
-        const query = `
+  // Collapse a thundering herd of cold requests into one query.
+  if (inFlight) return inFlight;
+
+  inFlight = queryAvailableLocations()
+    .then((rows) => {
+      cachedLocations = rows;
+      cachedAt = Date.now();
+      return rows;
+    })
+    .catch((err: unknown) => {
+      // Serving a stale list beats failing the filter UI outright.
+      if (cachedLocations !== null) {
+        logError('location_refresh_failed_serving_stale', err);
+        return cachedLocations;
+      }
+      throw err;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+
+  return inFlight;
+}
+
+async function queryAvailableLocations(): Promise<string[]> {
+  const client = await pool.connect();
+  try {
+    // Consolidated top-level regions (Tokyo, Kanagawa, Osaka, Singapore, etc.)
+    const query = `
             WITH normalized AS (
               SELECT 
                 CASE
@@ -606,10 +650,10 @@ export async function getAvailableLocations(): Promise<string[]> {
             HAVING SUM(cnt) >= 100
             ORDER BY total DESC;
         `;
-        const res = await client.query(query);
-        cachedLocations = res.rows.map((r) => r.display_location).sort();
-        return cachedLocations;
-    } finally {
-        client.release();
-    }
+    const res = await client.query(query);
+    cachedLocations = res.rows.map((r) => r.display_location).sort();
+    return cachedLocations;
+  } finally {
+    client.release();
+  }
 }

@@ -13,45 +13,45 @@ import pino from 'pino';
 import { config, isProduction } from '../config';
 
 export const logger = pino({
-    level: config.LOG_LEVEL,
-    // PII and credentials never reach the log sink, wherever it is shipped.
-    redact: {
-        paths: [
-            'email',
-            'cc',
-            'to',
-            'recipients',
-            'password',
-            'apiKey',
-            'authorization',
-            'req.headers.authorization',
-            'req.headers.cookie',
-            '*.email',
-            '*.phone_number',
-            '*.recipient_email',
-        ],
-        censor: '[REDACTED]',
-    },
-    formatters: { level: (label) => ({ level: label }) },
-    timestamp: pino.stdTimeFunctions.isoTime,
-    // Human-readable locally; newline-delimited JSON in production so log
-    // aggregators can parse it.
-    transport: isProduction
-        ? undefined
-        : { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
+  level: config.LOG_LEVEL,
+  // PII and credentials never reach the log sink, wherever it is shipped.
+  redact: {
+    paths: [
+      'email',
+      'cc',
+      'to',
+      'recipients',
+      'password',
+      'apiKey',
+      'authorization',
+      'req.headers.authorization',
+      'req.headers.cookie',
+      '*.email',
+      '*.phone_number',
+      '*.recipient_email',
+    ],
+    censor: '[REDACTED]',
+  },
+  formatters: { level: (label) => ({ level: label }) },
+  timestamp: pino.stdTimeFunctions.isoTime,
+  // Human-readable locally; newline-delimited JSON in production so log
+  // aggregators can parse it.
+  transport: isProduction
+    ? undefined
+    : { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
 });
 
 export const logInfo = (event: string, data?: Record<string, unknown>): void => {
-    logger.info({ event, ...data });
+  logger.info({ event, ...data });
 };
 
 export const logWarn = (event: string, data?: Record<string, unknown>): void => {
-    logger.warn({ event, ...data });
+  logger.warn({ event, ...data });
 };
 
 export const logError = (event: string, err: unknown, data?: Record<string, unknown>): void => {
-    const e = err instanceof Error ? err : new Error(String(err));
-    logger.error({ event, err: { message: e.message, stack: e.stack }, ...data });
+  const e = err instanceof Error ? err : new Error(String(err));
+  logger.error({ event, err: { message: e.message, stack: e.stack }, ...data });
 };
 
 /**
@@ -62,8 +62,8 @@ export const logError = (event: string, err: unknown, data?: Record<string, unkn
  * @deprecated Use logInfo / logWarn / logError.
  */
 export const logDebug = (msg: string): Promise<void> => {
-    logger.info(msg);
-    return Promise.resolve();
+  logger.info(msg);
+  return Promise.resolve();
 };
 
 /**
@@ -73,16 +73,16 @@ export const logDebug = (msg: string): Promise<void> => {
  * @deprecated Prefer logInfo with an explicit event name.
  */
 export const logSkipped = (
-    candidate: { name?: string; email?: string },
-    stage: string,
-    reasoning: string,
+  candidate: { name?: string; email?: string },
+  stage: string,
+  reasoning: string,
 ): Promise<void> => {
-    logger.info({
-        event: 'candidate_skipped',
-        stage,
-        reasoning,
-        name: candidate.name ?? 'Unknown',
-        email: candidate.email,
-    });
-    return Promise.resolve();
+  logger.info({
+    event: 'candidate_skipped',
+    stage,
+    reasoning,
+    name: candidate.name ?? 'Unknown',
+    email: candidate.email,
+  });
+  return Promise.resolve();
 };

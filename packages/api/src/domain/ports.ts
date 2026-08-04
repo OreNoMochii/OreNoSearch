@@ -18,48 +18,54 @@
 // ── Value types ─────────────────────────────────────────────────────────────
 
 export interface ScreenedCandidate {
-    readonly profileUrl: string;
-    readonly name: string;
-    readonly currentCompany?: string;
-    readonly location?: string;
-    readonly headline?: string;
-    readonly email?: string;
+  readonly profileUrl: string;
+  readonly name: string;
+  readonly currentCompany?: string;
+  readonly location?: string;
+  readonly headline?: string;
+  readonly email?: string;
 }
 
 export interface RiskScore {
-    /** Cox proportional-hazards score. Higher means likelier to move. */
-    readonly hazard: number;
-    /** Learning-to-rank relevance against the job description. */
-    readonly relevancy: number;
-    /** Probability of changing employer within the horizon, 0–1. */
-    readonly moveProb: number;
-    /** Tenure in the current role, months. */
-    readonly tenureMonths: number;
-    readonly medianTenure?: number;
+  /** Cox proportional-hazards score. Higher means likelier to move. */
+  readonly hazard: number;
+  /** Learning-to-rank relevance against the job description. */
+  readonly relevancy: number;
+  /** Probability of changing employer within the horizon, 0–1. */
+  readonly moveProb: number;
+  /** Tenure in the current role, months. */
+  readonly tenureMonths: number;
+  readonly medianTenure?: number;
 }
 
 export type Verdict = 'PASS' | 'REJECT';
 
 export interface ScreeningResult {
-    readonly profileUrl: string;
-    readonly verdict: Verdict;
-    readonly reasoning: string;
-    /** True when the provider rate-limited us; drives adaptive concurrency. */
-    readonly rateLimited?: boolean;
+  readonly profileUrl: string;
+  readonly verdict: Verdict;
+  readonly reasoning: string;
+  /** True when the provider rate-limited us; drives adaptive concurrency. */
+  readonly rateLimited?: boolean;
 }
 
 export interface ScreeningOptions {
-    readonly engine: 'llm' | 'tree' | 'tree_llm' | 'pipeline';
-    readonly model: string;
-    readonly adjacentRoles?: string;
-    readonly topN?: number;
-    readonly topK?: number;
-    readonly treeTopK?: number;
-    readonly minExp?: number;
-    readonly maxExp?: number;
-    readonly companyName: string;
-    readonly jobName: string;
-    readonly batchId?: number;
+  readonly engine: 'llm' | 'tree' | 'tree_llm' | 'pipeline';
+  readonly model: string;
+  readonly adjacentRoles?: string;
+  readonly topN?: number;
+  readonly topK?: number;
+  readonly treeTopK?: number;
+  readonly minExp?: number;
+  readonly maxExp?: number;
+  readonly companyName: string;
+  readonly jobName: string;
+  readonly batchId?: number;
+  /**
+   * Attach company-level intel to each candidate before screening.
+   * B30: the flag existed in the request schema and the job payload but never
+   * reached a strategy, so the UI's Company Intel toggle did nothing.
+   */
+  readonly useCompanyIntel?: boolean;
 }
 
 // ── Ports ───────────────────────────────────────────────────────────────────
@@ -72,12 +78,12 @@ export interface ScreeningOptions {
  * branching that currently spans several hundred lines of OutreachService.
  */
 export interface ScreeningStrategy {
-    readonly name: ScreeningOptions['engine'];
-    screen(
-        jd: string,
-        candidates: readonly ScreenedCandidate[],
-        opts: ScreeningOptions,
-    ): Promise<readonly ScreeningResult[]>;
+  readonly name: ScreeningOptions['engine'];
+  screen(
+    jd: string,
+    candidates: readonly ScreenedCandidate[],
+    opts: ScreeningOptions,
+  ): Promise<readonly ScreeningResult[]>;
 }
 
 /**
@@ -88,46 +94,46 @@ export interface ScreeningStrategy {
  * so the orchestrator does not care which is in play.
  */
 export interface RiskScorer {
-    score(profileUrls: readonly string[], jdText: string): Promise<ReadonlyMap<string, RiskScore>>;
+  score(profileUrls: readonly string[], jdText: string): Promise<ReadonlyMap<string, RiskScore>>;
 }
 
 /** Where a shortlist is published for humans to act on (currently Sheets). */
 export interface CandidateSink {
-    publish(batch: {
-        readonly batchId?: number;
-        readonly jobName: string;
-        readonly companyName: string;
-        readonly candidates: readonly ScreenedCandidate[];
-        readonly scores: ReadonlyMap<string, RiskScore>;
-        readonly sharedWith: string;
-    }): Promise<{ readonly url: string; readonly inserted: number }>;
+  publish(batch: {
+    readonly batchId?: number;
+    readonly jobName: string;
+    readonly companyName: string;
+    readonly candidates: readonly ScreenedCandidate[];
+    readonly scores: ReadonlyMap<string, RiskScore>;
+    readonly sharedWith: string;
+  }): Promise<{ readonly url: string; readonly inserted: number }>;
 }
 
 /** Outbound notification. Returns false rather than throwing on failure, so a
  *  delivery error cannot mark a batch as contacted. */
 export interface OutreachNotifier {
-    notify(message: {
-        readonly subject: string;
-        readonly body: string;
-        readonly to: string;
-        readonly cc?: string;
-    }): Promise<boolean>;
+  notify(message: {
+    readonly subject: string;
+    readonly body: string;
+    readonly to: string;
+    readonly cc?: string;
+  }): Promise<boolean>;
 }
 
 /** Deduplication and audit history. */
 export interface OutreachHistoryRepository {
-    findAlreadySent(
-        profileUrls: readonly string[],
-        recipients: readonly string[],
-        companyName: string,
-    ): Promise<ReadonlySet<string>>;
+  findAlreadySent(
+    profileUrls: readonly string[],
+    recipients: readonly string[],
+    companyName: string,
+  ): Promise<ReadonlySet<string>>;
 
-    markSent(
-        profileUrls: readonly string[],
-        recipients: readonly string[],
-        companyName: string,
-        jobName: string,
-    ): Promise<number>;
+  markSent(
+    profileUrls: readonly string[],
+    recipients: readonly string[],
+    companyName: string,
+    jobName: string,
+  ): Promise<number>;
 }
 
 /**
@@ -138,11 +144,11 @@ export interface OutreachHistoryRepository {
  * safe in docker-compose.prod.yml — see the comment on the api service there.
  */
 export interface BatchQueue {
-    enqueue(job: unknown): Promise<number>;
-    reportProgress(batchId: number, processed: number): Promise<void>;
-    snapshot(): Promise<{
-        readonly activeCount: number;
-        readonly pendingCount: number;
-        readonly maxConcurrent: number;
-    }>;
+  enqueue(job: unknown): Promise<number>;
+  reportProgress(batchId: number, processed: number): Promise<void>;
+  snapshot(): Promise<{
+    readonly activeCount: number;
+    readonly pendingCount: number;
+    readonly maxConcurrent: number;
+  }>;
 }
