@@ -109,33 +109,40 @@ export async function initDb() {
       );
       CREATE INDEX IF NOT EXISTS idx_screening_results_lookup ON screening_results(company_name, job_name);
 
+      -- Must stay byte-identical to migration 003, which builds
+      -- idx_cu_total_exp_months on this expression. initDb() issues
+      -- CREATE OR REPLACE and runs from the scraper entrypoint, so a drift here
+      -- silently replaces the indexed function and invalidates the index.
+      --
+      -- Backslashes are DOUBLED: this SQL lives in a JS template literal, where
+      -- \\d and \\s are not recognised escapes, so JavaScript drops the
+      -- backslash and Postgres would receive '(?i)(d+)s*yr' — matching literal
+      -- 'd' characters instead of digits (B24).
+      --
+      -- The pattern bounds digits to 3 and requires a word boundary (\\y) after
+      -- the unit. Without the boundary, 'mo' matched Mon/Monday/Monash/MoneyLion,
+      -- so phone numbers, ISBNs and URLs parsed as durations — 4.32% of rows
+      -- computed wrong values and 30 rows raised an integer overflow that made
+      -- the function throw outright (B31).
       CREATE OR REPLACE FUNCTION calculate_total_experience_months(exp TEXT)
       RETURNS INTEGER AS $$
       DECLARE
           rec RECORD;
-          total_m INTEGER := 0;
+          total_m BIGINT := 0;
       BEGIN
           IF exp IS NULL OR exp = '' THEN
               RETURN 0;
           END IF;
-          
-          -- NOTE the doubled backslashes. This SQL lives in a JS template
-          -- literal, where \\d and \\s are not recognised escape sequences, so
-          -- JavaScript silently drops the backslash and Postgres received
-          -- '(?i)(d+)s*yr[s]?' — a pattern matching literal 'd' characters
-          -- rather than digits. Because initDb() issues CREATE OR REPLACE and
-          -- is called from the scraper entrypoint, running the scraper would
-          -- have overwritten a working function with one that returns 0 for
-          -- every input, silently zeroing every minExp/maxExp filter.
-          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d+)\\s*yr[s]?', 'g'))[1]::int AS yrs LOOP
+
+          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d{1,3})\\s*yrs?\\y', 'g'))[1]::bigint AS yrs LOOP
               total_m := total_m + (rec.yrs * 12);
           END LOOP;
 
-          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d+)\\s*mo[s]?', 'g'))[1]::int AS mos LOOP
+          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d{1,3})\\s*mos?\\y', 'g'))[1]::bigint AS mos LOOP
               total_m := total_m + rec.mos;
           END LOOP;
 
-          RETURN total_m;
+          RETURN LEAST(total_m, 2147483647)::INTEGER;
       END;
       $$ LANGUAGE plpgsql IMMUTABLE;
     `;
@@ -480,17 +487,24 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
       conditions.push(`(${locConditions.join(' OR ')})`);
     }
 
-    // B14: reads the STORED generated column added by migration 002 rather
-    // than calling calculate_total_experience_months() per row, which forced
-    // a sequential scan over the whole table on every filtered search.
+    // B14: the expression below is served by idx_cu_total_exp_months
+    // (migration 003), so it is an index lookup rather than a per-row function
+    // call over 5.6M rows. The expression must stay character-identical to the
+    // one in the index definition or the planner will ignore it.
+    //
+    // Deliberately NOT the existing `experience_months` column: that one is
+    // generated with substring(), which captures only the FIRST match, so it
+    // measures the first-listed role's duration. This function sums every role.
+    // On a 500-row sample the two agreed on 17% of rows — swapping them would
+    // silently redefine what minExp/maxExp mean.
     if (params.minExp !== undefined) {
-      conditions.push(`total_experience_months >= $${paramIndex}`);
+      conditions.push(`calculate_total_experience_months(experience) >= $${paramIndex}`);
       values.push(params.minExp * 12);
       paramIndex++;
     }
 
     if (params.maxExp !== undefined) {
-      conditions.push(`total_experience_months <= $${paramIndex}`);
+      conditions.push(`calculate_total_experience_months(experience) <= $${paramIndex}`);
       values.push(params.maxExp * 12);
       paramIndex++;
     }
@@ -524,9 +538,17 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
       whereClause = 'WHERE ' + conditions.join(' AND ');
     }
 
-    // B14: `count(*) OVER ()` returns the unlimited match total alongside the
-    // page. The previous implementation ran the entire predicate a second
-    // time in a separate COUNT query, doubling the cost of every search.
+    const countQuery = `
+            SELECT count(*) FROM (
+                SELECT 1
+                FROM candidates_upgraded
+                ${whereClause}
+                LIMIT 1000
+            ) sub
+        `;
+    const countRes = await client.query(countQuery, values);
+    const total = parseInt(countRes.rows[0].count, 10);
+
     const finalQuery = `
             SELECT
                 profile_url as folder_id,
@@ -538,19 +560,14 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
                 summary as candidate_summary,
                 experience as resume_text_excerpt,
                 education,
-                skills,
-                count(*) OVER () AS total_count
+                skills
             FROM candidates_upgraded
             ${whereClause}
             LIMIT $${paramIndex}
         `;
 
     const res = await client.query(finalQuery, [...values, params.limit]);
-
-    const total = res.rows.length > 0 ? parseInt(res.rows[0].total_count, 10) : 0;
-    const hits = res.rows.map(({ total_count: _total, ...rest }) => rest);
-
-    return { hits, total };
+    return { hits: res.rows, total };
   } finally {
     client.release();
   }
