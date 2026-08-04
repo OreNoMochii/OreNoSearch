@@ -1,16 +1,5 @@
 import React, { useState, useEffect, useMemo, useDeferredValue, useId } from 'react';
-import {
-  Search,
-  Loader2,
-  Plus,
-  X,
-  Briefcase,
-  MapPin,
-  Activity,
-  Download,
-  Ban,
-  Info,
-} from 'lucide-react';
+import { Search, Plus, X, Briefcase, MapPin, Download, Ban } from 'lucide-react';
 import {
   runBooleanSearch,
   getAvailableLocations,
@@ -23,6 +12,7 @@ import { QueueMonitor } from './components/QueueMonitor';
 import { useQueueStatus } from './hooks/useQueueStatus';
 import { OutreachForm } from './components/OutreachForm';
 import { CandidateCard } from './components/CandidateCard';
+import { ExplainableAction } from './components/ExplainableAction';
 
 const API_BASE_URL = '';
 
@@ -68,9 +58,6 @@ function App() {
   const [availableLocations, setAvailableLocations] = useState<string[]>([]);
   const [locationSearch, setLocationSearch] = useState('');
   const outreachTitleId = useId();
-  const [hoveredTooltip, setHoveredTooltip] = useState<
-    'sql' | 'meili' | 'rl' | 'pure_ai' | 'tree' | 'hybrid' | null
-  >(null);
 
   // The filter previously ran over the full location list on every keystroke,
   // inside a 1600-line render. useDeferredValue keeps typing responsive and
@@ -964,157 +951,35 @@ function App() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem', width: '100%' }}>
-                  <div
-                    style={{ flex: 1, position: 'relative' }}
-                    onMouseEnter={() => setHoveredTooltip('sql')}
-                    onMouseLeave={() => setHoveredTooltip(null)}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSearch(true)}
-                      disabled={loadingState !== 'none'}
-                      style={{
-                        width: '100%',
-                        background: 'linear-gradient(135deg, #10b981, #059669)',
-                        padding: '0.75rem',
-                        borderRadius: '0.75rem',
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.5rem',
-                        border: 'none',
-                        color: '#fff',
-                        cursor: loadingState !== 'none' ? 'not-allowed' : 'pointer',
-                        opacity: loadingState !== 'none' ? 0.7 : 1,
-                        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)',
-                      }}
-                    >
-                      {loadingState === 'sql' ? (
-                        <Loader2 className="spin" size={18} />
-                      ) : (
-                        <Search size={18} />
-                      )}
-                      Full Search (PostgreSQL)
-                      <span
-                        style={{
-                          fontSize: '0.75rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.2rem',
-                          background: 'rgba(0,0,0,0.2)',
-                          padding: '0.15rem 0.4rem',
-                          borderRadius: '1rem',
-                          marginLeft: '0.25rem',
-                        }}
-                      >
-                        <Info size={12} /> Explain
-                      </span>
-                    </button>
-                    <AnimatePresence>
-                      {hoveredTooltip === 'sql' && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 10 }}
-                          style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: '0',
-                            right: '0',
-                            marginTop: '0.5rem',
-                            background: '#1e293b',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            padding: '0.75rem',
-                            borderRadius: '0.5rem',
-                            color: '#e2e8f0',
-                            fontSize: '0.85rem',
-                            zIndex: 50,
-                            boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                          }}
-                        >
-                          Uses database full-text search for <strong>100% recall</strong>. Best for
-                          exact boolean combinations across all candidates.
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                  <ExplainableAction
+                    label="Full Search (PostgreSQL)"
+                    tone="search"
+                    icon={<Search size={18} aria-hidden="true" />}
+                    loading={loadingState === 'sql'}
+                    disabled={loadingState !== 'none'}
+                    onClick={() => handleSearch(true)}
+                    explanation={
+                      <>
+                        Uses database full-text search for <strong>100% recall</strong>. Best for
+                        exact boolean combinations across all candidates.
+                      </>
+                    }
+                  />
 
-                  <div
-                    style={{ flex: 1, position: 'relative' }}
-                    onMouseEnter={() => setHoveredTooltip('meili')}
-                    onMouseLeave={() => setHoveredTooltip(null)}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSearch(false)}
-                      disabled={loadingState !== 'none'}
-                      style={{
-                        width: '100%',
-                        background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-                        padding: '0.75rem',
-                        borderRadius: '0.75rem',
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '0.5rem',
-                        border: 'none',
-                        color: '#fff',
-                        cursor: loadingState !== 'none' ? 'not-allowed' : 'pointer',
-                        opacity: loadingState !== 'none' ? 0.7 : 1,
-                        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)',
-                      }}
-                    >
-                      {loadingState === 'meili' ? (
-                        <Loader2 className="spin" size={18} />
-                      ) : (
-                        <Activity size={18} />
-                      )}
-                      Top Results (Meilisearch)
-                      <span
-                        style={{
-                          fontSize: '0.75rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.2rem',
-                          background: 'rgba(0,0,0,0.2)',
-                          padding: '0.15rem 0.4rem',
-                          borderRadius: '1rem',
-                          marginLeft: '0.25rem',
-                        }}
-                      >
-                        <Info size={12} /> Explain
-                      </span>
-                    </button>
-                    <AnimatePresence>
-                      {hoveredTooltip === 'meili' && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 10 }}
-                          style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: '0',
-                            right: '0',
-                            marginTop: '0.5rem',
-                            background: '#1e293b',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            padding: '0.75rem',
-                            borderRadius: '0.5rem',
-                            color: '#e2e8f0',
-                            fontSize: '0.85rem',
-                            zIndex: 50,
-                            boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                          }}
-                        >
-                          Uses AI search engine. Best for finding the most relevant top matches
-                          quickly, but will drop results outside the top 5,000.
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                  <ExplainableAction
+                    label="Top Matches (AI Engine)"
+                    tone="ml"
+                    icon={<Search size={18} aria-hidden="true" />}
+                    loading={loadingState === 'meili'}
+                    disabled={loadingState !== 'none'}
+                    onClick={() => handleSearch(false)}
+                    explanation={
+                      <>
+                        Uses AI search engine. Best for finding the most relevant top matches
+                        quickly, but will drop results outside the top 5,000.
+                      </>
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -1170,290 +1035,46 @@ function App() {
                       <Download size={18} />
                       Export CSV
                     </button>
-                    <div
-                      style={{ position: 'relative' }}
-                      onMouseEnter={() => setHoveredTooltip('rl')}
-                      onMouseLeave={() => setHoveredTooltip(null)}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreeningEngine('llm');
-                          setUsePipeline(false);
-                          setIsOutreachModalOpen(true);
-                        }}
-                        style={{
-                          background: 'linear-gradient(135deg, #10b981, #059669)',
-                          padding: '0.6rem 1.25rem',
-                          borderRadius: '0.5rem',
-                          fontWeight: 600,
-                          border: 'none',
-                          color: '#fff',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        }}
-                      >
-                        🎯 Run AI + RL Flight Risk (99% Acc)
-                        <span
-                          style={{
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            background: 'rgba(0,0,0,0.2)',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '1rem',
-                            marginLeft: '0.25rem',
-                          }}
-                        >
-                          <Info size={12} /> Explain
-                        </span>
-                      </button>
-                      <AnimatePresence>
-                        {hoveredTooltip === 'rl' && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            style={{
-                              position: 'absolute',
-                              bottom: '100%',
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              marginBottom: '0.5rem',
-                              background: '#1e293b',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              padding: '0.75rem',
-                              borderRadius: '0.5rem',
-                              color: '#e2e8f0',
-                              fontSize: '0.85rem',
-                              zIndex: 50,
-                              minWidth: '250px',
-                              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                            }}
-                          >
-                            Uses a combination of AI and Reinforcement Learning models to accurately
-                            predict candidate flight risk and job match.
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    <div
-                      style={{ position: 'relative' }}
-                      onMouseEnter={() => setHoveredTooltip('pure_ai')}
-                      onMouseLeave={() => setHoveredTooltip(null)}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreeningEngine('llm');
-                          setUsePipeline(true);
-                          setIsOutreachModalOpen(true);
-                        }}
-                        style={{
-                          background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-                          padding: '0.6rem 1.25rem',
-                          borderRadius: '0.5rem',
-                          fontWeight: 600,
-                          border: 'none',
-                          color: '#fff',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        }}
-                      >
-                        🚀 Pure AI Semantic Match
-                        <span
-                          style={{
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            background: 'rgba(0,0,0,0.2)',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '1rem',
-                            marginLeft: '0.25rem',
-                          }}
-                        >
-                          <Info size={12} /> Explain
-                        </span>
-                      </button>
-                      <AnimatePresence>
-                        {hoveredTooltip === 'pure_ai' && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            style={{
-                              position: 'absolute',
-                              bottom: '100%',
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              marginBottom: '0.5rem',
-                              background: '#1e293b',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              padding: '0.75rem',
-                              borderRadius: '0.5rem',
-                              color: '#e2e8f0',
-                              fontSize: '0.85rem',
-                              zIndex: 50,
-                              minWidth: '250px',
-                              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                            }}
-                          >
-                            Uses raw AI prompts to evaluate candidates for role fit without external
-                            machine learning heuristics.
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    <div
-                      style={{ position: 'relative' }}
-                      onMouseEnter={() => setHoveredTooltip('tree')}
-                      onMouseLeave={() => setHoveredTooltip(null)}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreeningEngine('tree');
-                          setUsePipeline(false);
-                          setIsOutreachModalOpen(true);
-                        }}
-                        style={{
-                          background: 'linear-gradient(135deg, #8b5cf6, #6d28d9)',
-                          padding: '0.6rem 1.25rem',
-                          borderRadius: '0.5rem',
-                          fontWeight: 600,
-                          border: 'none',
-                          color: '#fff',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        }}
-                      >
-                        🌳 Tree-Based ML Screening
-                        <span
-                          style={{
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            background: 'rgba(0,0,0,0.2)',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '1rem',
-                            marginLeft: '0.25rem',
-                          }}
-                        >
-                          <Info size={12} /> Explain
-                        </span>
-                      </button>
-                      <AnimatePresence>
-                        {hoveredTooltip === 'tree' && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            style={{
-                              position: 'absolute',
-                              bottom: '100%',
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              marginBottom: '0.5rem',
-                              background: '#1e293b',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              padding: '0.75rem',
-                              borderRadius: '0.5rem',
-                              color: '#e2e8f0',
-                              fontSize: '0.85rem',
-                              zIndex: 50,
-                              minWidth: '250px',
-                              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                            }}
-                          >
-                            Uses a fast XGBoost ML model to calculate heuristic probability and risk
-                            scoring.
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    <div
-                      style={{ position: 'relative' }}
-                      onMouseEnter={() => setHoveredTooltip('hybrid')}
-                      onMouseLeave={() => setHoveredTooltip(null)}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreeningEngine('tree_llm');
-                          setUsePipeline(false);
-                          setIsOutreachModalOpen(true);
-                        }}
-                        style={{
-                          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                          padding: '0.6rem 1.25rem',
-                          borderRadius: '0.5rem',
-                          fontWeight: 600,
-                          border: 'none',
-                          color: '#fff',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        }}
-                      >
-                        🌳+🤖 Tree + AI Hybrid
-                        <span
-                          style={{
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            background: 'rgba(0,0,0,0.2)',
-                            padding: '0.15rem 0.4rem',
-                            borderRadius: '1rem',
-                            marginLeft: '0.25rem',
-                          }}
-                        >
-                          <Info size={12} /> Explain
-                        </span>
-                      </button>
-                      <AnimatePresence>
-                        {hoveredTooltip === 'hybrid' && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            style={{
-                              position: 'absolute',
-                              bottom: '100%',
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              marginBottom: '0.5rem',
-                              background: '#1e293b',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              padding: '0.75rem',
-                              borderRadius: '0.5rem',
-                              color: '#e2e8f0',
-                              fontSize: '0.85rem',
-                              zIndex: 50,
-                              minWidth: '250px',
-                              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)',
-                            }}
-                          >
-                            Combines Tree-Based ML scoring for fast filtering with AI-based semantic
-                            evaluation for high accuracy.
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
+                    <ExplainableAction
+                      label="🎯 Run AI + RL Flight Risk (99% Acc)"
+                      tone="ml"
+                      onClick={() => {
+                        setScreeningEngine('llm');
+                        setUsePipeline(false);
+                        setIsOutreachModalOpen(true);
+                      }}
+                      explanation="Uses a combination of AI and Reinforcement Learning models to accurately predict candidate flight risk and job match."
+                    />
+                    <ExplainableAction
+                      label="🚀 Pure AI Semantic Match"
+                      tone="ai"
+                      onClick={() => {
+                        setScreeningEngine('llm');
+                        setUsePipeline(true);
+                        setIsOutreachModalOpen(true);
+                      }}
+                      explanation="Uses raw AI prompts to evaluate candidates for role fit without external machine learning heuristics."
+                    />
+                    <ExplainableAction
+                      label="🌳 Tree-Based ML Screening"
+                      tone="tree"
+                      onClick={() => {
+                        setScreeningEngine('tree');
+                        setUsePipeline(false);
+                        setIsOutreachModalOpen(true);
+                      }}
+                      explanation="Uses a fast XGBoost ML model to calculate heuristic probability and risk scoring."
+                    />
+                    <ExplainableAction
+                      label="🌳+🤖 Tree + AI Hybrid"
+                      tone="hybrid"
+                      onClick={() => {
+                        setScreeningEngine('tree_llm');
+                        setUsePipeline(false);
+                        setIsOutreachModalOpen(true);
+                      }}
+                      explanation="Combines Tree-Based ML scoring for fast filtering with AI-based semantic evaluation for high accuracy."
+                    />
                   </div>
                 )}
               </div>

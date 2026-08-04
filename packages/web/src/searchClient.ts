@@ -269,9 +269,7 @@ export interface SearchQuery {
   locationKeywords?: string[];
 }
 
-export async function runBooleanSearch(
-  query: SearchQuery,
-): Promise<{
+export async function runBooleanSearch(query: SearchQuery): Promise<{
   hits: BooleanHit[];
   total: number;
   totalIsCapped?: boolean;
@@ -435,9 +433,7 @@ export async function getAvailableLocations(): Promise<string[]> {
   }
 }
 
-export async function runSqlBooleanSearch(
-  query: SearchQuery,
-): Promise<{
+export async function runSqlBooleanSearch(query: SearchQuery): Promise<{
   hits: BooleanHit[];
   total: number;
   totalIsCapped?: boolean;

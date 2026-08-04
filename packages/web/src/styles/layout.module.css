@@ -1,22 +1,46 @@
 .main {
-  max-width: 1200px; margin-inline: auto;
+  max-width: 1200px;
+  margin-inline: auto;
   padding: var(--space-8) var(--space-6);
-  display: grid; gap: var(--space-8);
+  display: grid;
+  gap: var(--space-8);
   grid-template-columns: minmax(0, 1fr);
 }
-@media (min-width: 1024px) { .main { grid-template-columns: minmax(320px, 380px) minmax(0, 1fr); } }
-@media (max-width: 640px)  { .main { padding: var(--space-4) var(--space-3); gap: var(--space-6); } }
+@media (min-width: 1024px) {
+  .main {
+    grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .main {
+    padding: var(--space-4) var(--space-3);
+    gap: var(--space-6);
+  }
+}
 
 .skipLink {
-  position: absolute; left: -9999px;
-  background: var(--accent-600); color: #fff;
-  padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); z-index: 9999;
+  position: absolute;
+  left: -9999px;
+  background: var(--accent-600);
+  color: #fff;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  z-index: 9999;
 }
-.skipLink:focus { left: var(--space-4); top: var(--space-4); }
+.skipLink:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+}
 
 .srOnly {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .header {
