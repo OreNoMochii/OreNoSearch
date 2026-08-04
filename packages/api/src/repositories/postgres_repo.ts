@@ -557,7 +557,15 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     }
 }
 
+let cachedLocations: string[] | null = null;
+let lastCacheUpdate: number = 0;
+const CACHE_TTL = 1000 * 60 * 60 * 24; // 24 hours
+
 export async function getAvailableLocations(): Promise<string[]> {
+    if (cachedLocations && Date.now() - lastCacheUpdate < CACHE_TTL) {
+        return cachedLocations;
+    }
+
     const client = await pool.connect();
     try {
         // Consolidated top-level regions (Tokyo, Kanagawa, Osaka, Singapore, etc.)
@@ -601,7 +609,9 @@ export async function getAvailableLocations(): Promise<string[]> {
             ORDER BY total DESC;
         `;
         const res = await client.query(query);
-        return res.rows.map((r) => r.display_location).sort();
+        cachedLocations = res.rows.map((r) => r.display_location).sort();
+        lastCacheUpdate = Date.now();
+        return cachedLocations;
     } finally {
         client.release();
     }
