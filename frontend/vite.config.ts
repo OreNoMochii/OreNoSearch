@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { isIP } from 'net';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,39 +48,67 @@ export default defineConfig(({ mode }) => {
       {
         name: 'ip-whitelist',
         configureServer(server) {
+          // B5: the previous check fell back to `remoteAddr.includes(ip)`, a
+          // substring match. '192.168.0.3' therefore admitted 192.168.0.30
+          // through .39, and '::1' admitted any IPv6 address containing '::1'
+          // (e.g. 2001:db8::1234). The old normaliser was also greedy —
+          // `replace(/^.*:/, '')` reduced a real IPv6 address to its last group.
+          //
+          // Addresses now come from DEV_ALLOWED_IPS rather than being hardcoded.
+          const allowed = new Set(
+            ['127.0.0.1', '::1', ...(env.DEV_ALLOWED_IPS || '').split(',')]
+              .map(ip => ip.trim())
+              .filter(Boolean)
+          );
+
+          /** Unwraps ::ffff:1.2.3.4 to 1.2.3.4; leaves genuine IPv6 intact. */
+          const normalise = (remote: string): string | null => {
+            if (!remote) return null;
+            const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(remote);
+            const candidate = mapped ? mapped[1] : remote;
+            return isIP(candidate) ? candidate : null;
+          };
+
           server.middlewares.use((req, res, next) => {
-            const tailscaleIps = (env.TAILSCALE_ALLOWED_IP || '').split(',').map(ip => ip.trim()).filter(Boolean);
-            const allowedIps = [
-              '127.0.0.1',
-              '::1',
-              '192.168.0.41',
-              '192.168.0.108',
-              '192.168.0.53',
-              '192.168.0.26',
-              '192.168.0.6',
-              '192.168.0.3',
-              '192.168.0.217',
-              ...tailscaleIps
-            ];
-
             const remoteAddr = req.socket.remoteAddress || '';
-            // Normalize IP: strip IPv6 prefix (::ffff:) if present to get the raw IPv4
-            const cleanIp = remoteAddr.replace(/^.*:/, '');
+            const ip = normalise(remoteAddr);
 
-            const isAllowed = allowedIps.includes(cleanIp) ||
-              allowedIps.some(ip => remoteAddr.includes(ip));
+            if (ip !== null && allowed.has(ip)) return next();   // exact match only
 
-            if (!isAllowed) {
-              console.warn(`Blocked unauthorized access attempt from: ${remoteAddr} (Cleaned: ${cleanIp})`);
-              res.statusCode = 403;
-              res.end('<h1>403 Forbidden</h1><p>Access denied: Your IP is not whitelisted.</p>');
-              return;
-            }
-            next();
+            console.warn(`[ip-whitelist] blocked ${remoteAddr}`);
+            res.statusCode = 403;
+            res.end('<h1>403 Forbidden</h1><p>Access denied: your IP is not allowed.</p>');
           });
         }
       }
     ],
+    build: {
+      target: 'es2022',
+      // 'hidden' emits maps for error tracking without referencing them from
+      // the shipped bundle, so sources are not exposed to visitors.
+      sourcemap: 'hidden',
+      cssCodeSplit: true,
+      reportCompressedSize: false,
+      chunkSizeWarningLimit: 500,
+      rollupOptions: {
+        output: {
+          // Function form: Vite 8 bundles with rolldown, which does not accept
+          // the object shorthand. Splitting these out keeps the app chunk small
+          // and lets the vendor chunks cache independently across deploys.
+          manualChunks(id: string) {
+            if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+              return 'react';
+            }
+            if (id.includes('node_modules/framer-motion')) return 'motion';
+            if (id.includes('node_modules/lucide-react')) return 'icons';
+            return undefined;
+          },
+        },
+      },
+    },
+    // NOTE: no esbuild.drop/pure here — Vite 8 bundles with rolldown, which
+    // does not expose those options. console.error is retained deliberately
+    // so runtime diagnostics still surface in production.
     server: {
       host: '0.0.0.0',
       https: {

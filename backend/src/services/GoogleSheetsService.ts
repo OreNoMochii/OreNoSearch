@@ -1,18 +1,16 @@
 import { google, sheets_v4, drive_v3 } from 'googleapis';
 import { logDebug } from '../utils/logger';
+import { config } from '../config';
 import path from 'path';
-import dotenv from 'dotenv';
 import fs from 'fs';
-
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
+    'https://www.googleapis.com/auth/drive',
 ];
 
 // Root folder where all role subfolders are created
-const ROOT_FOLDER_ID = process.env.GDRIVE_ROOT_FOLDER_ID || '1DUr5MMZ-HpglgB0EgTqHE54mEK9B-fxC';
+const ROOT_FOLDER_ID = config.GDRIVE_ROOT_FOLDER_ID;
 
 const SHEET_HEADERS = [
     'Name',
@@ -25,7 +23,7 @@ const SHEET_HEADERS = [
     'Location',
     'Contacted By',
     'Shared With',
-    'Date Added'
+    'Date Added',
 ];
 
 export class GoogleSheetsService {
@@ -41,17 +39,22 @@ export class GoogleSheetsService {
         if (credPath.endsWith('client_secret.json')) {
             const content = fs.readFileSync(credPath, 'utf-8');
             const credentials = JSON.parse(content);
-            const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
+            const { client_secret, client_id, redirect_uris } =
+                credentials.installed || credentials.web;
 
             const oAuth2Client = new google.auth.OAuth2(
                 client_id,
                 client_secret,
-                redirect_uris && redirect_uris.length > 0 ? redirect_uris[0] : 'urn:ietf:wg:oauth:2.0:oob'
+                redirect_uris && redirect_uris.length > 0
+                    ? redirect_uris[0]
+                    : 'urn:ietf:wg:oauth:2.0:oob',
             );
 
             const tokenPath = path.join(path.dirname(credPath), 'token.json');
             if (!fs.existsSync(tokenPath)) {
-                throw new Error(`token.json not found at ${tokenPath}. Please run the token generation script first.`);
+                throw new Error(
+                    `token.json not found at ${tokenPath}. Please run the token generation script first.`,
+                );
             }
 
             const tokenContent = fs.readFileSync(tokenPath, 'utf-8');
@@ -88,12 +91,14 @@ export class GoogleSheetsService {
                 fields: 'files(id, name)',
                 pageSize: 5,
                 supportsAllDrives: true,
-                includeItemsFromAllDrives: true
+                includeItemsFromAllDrives: true,
             });
 
             const files = res.data.files || [];
             if (files.length > 0) {
-                await logDebug(`  [GSheets] Found existing folder: "${files[0].name}" (${files[0].id})`);
+                await logDebug(
+                    `  [GSheets] Found existing folder: "${files[0].name}" (${files[0].id})`,
+                );
                 return files[0].id!;
             }
         } catch (err: any) {
@@ -107,13 +112,15 @@ export class GoogleSheetsService {
                 requestBody: {
                     name: folderName,
                     mimeType: 'application/vnd.google-apps.folder',
-                    parents: [parentId]
+                    parents: [parentId],
                 },
                 fields: 'id, name',
-                supportsAllDrives: true
+                supportsAllDrives: true,
             });
 
-            await logDebug(`  [GSheets] Created new folder: "${folderName}" (${createRes.data.id})`);
+            await logDebug(
+                `  [GSheets] Created new folder: "${folderName}" (${createRes.data.id})`,
+            );
             return createRes.data.id!;
         } catch (err: any) {
             await logDebug(`  [GSheets] Error creating folder: ${err.message}`);
@@ -125,7 +132,10 @@ export class GoogleSheetsService {
      * Search a folder for an existing spreadsheet with the canonical name.
      * Returns the spreadsheet ID if found, null otherwise.
      */
-    private async findSpreadsheet(folderId: string, spreadsheetName: string): Promise<string | null> {
+    private async findSpreadsheet(
+        folderId: string,
+        spreadsheetName: string,
+    ): Promise<string | null> {
         await this.ensureClients();
 
         const escapedName = spreadsheetName.replace(/'/g, "\\'");
@@ -136,12 +146,14 @@ export class GoogleSheetsService {
                 fields: 'files(id, name)',
                 pageSize: 5,
                 supportsAllDrives: true,
-                includeItemsFromAllDrives: true
+                includeItemsFromAllDrives: true,
             });
 
             const files = res.data.files || [];
             if (files.length > 0) {
-                await logDebug(`  [GSheets] Found existing spreadsheet: "${files[0].name}" (${files[0].id})`);
+                await logDebug(
+                    `  [GSheets] Found existing spreadsheet: "${files[0].name}" (${files[0].id})`,
+                );
                 return files[0].id!;
             }
 
@@ -164,25 +176,31 @@ export class GoogleSheetsService {
             const createRes = await this.sheets!.spreadsheets.create({
                 requestBody: {
                     properties: { title: spreadsheetName },
-                    sheets: [{
-                        properties: {
-                            title: 'Candidates',
-                            gridProperties: { frozenRowCount: 1 }
-                        }
-                    }]
-                }
+                    sheets: [
+                        {
+                            properties: {
+                                title: 'Candidates',
+                                gridProperties: { frozenRowCount: 1 },
+                            },
+                        },
+                    ],
+                },
             });
 
             const spreadsheetId = createRes.data.spreadsheetId!;
 
             // Move it into the target folder
-            const fileInfo = await this.drive!.files.get({ fileId: spreadsheetId, fields: 'parents', supportsAllDrives: true });
+            const fileInfo = await this.drive!.files.get({
+                fileId: spreadsheetId,
+                fields: 'parents',
+                supportsAllDrives: true,
+            });
             await this.drive!.files.update({
                 fileId: spreadsheetId,
                 addParents: folderId,
                 removeParents: fileInfo.data.parents?.join(',') || '',
                 fields: 'id, parents',
-                supportsAllDrives: true
+                supportsAllDrives: true,
             });
 
             // Write headers
@@ -191,8 +209,8 @@ export class GoogleSheetsService {
                 range: 'Candidates!A1',
                 valueInputOption: 'RAW',
                 requestBody: {
-                    values: [SHEET_HEADERS]
-                }
+                    values: [SHEET_HEADERS],
+                },
             });
 
             // Format header row (bold + dark background)
@@ -206,23 +224,38 @@ export class GoogleSheetsService {
                                 range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
                                 cell: {
                                     userEnteredFormat: {
-                                        backgroundColor: { red: 0.15, green: 0.15, blue: 0.22, alpha: 1 },
-                                        textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } }
-                                    }
+                                        backgroundColor: {
+                                            red: 0.15,
+                                            green: 0.15,
+                                            blue: 0.22,
+                                            alpha: 1,
+                                        },
+                                        textFormat: {
+                                            bold: true,
+                                            foregroundColor: { red: 1, green: 1, blue: 1 },
+                                        },
+                                    },
                                 },
-                                fields: 'userEnteredFormat(backgroundColor,textFormat)'
-                            }
+                                fields: 'userEnteredFormat(backgroundColor,textFormat)',
+                            },
                         },
                         {
                             autoResizeDimensions: {
-                                dimensions: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: SHEET_HEADERS.length }
-                            }
-                        }
-                    ]
-                }
+                                dimensions: {
+                                    sheetId,
+                                    dimension: 'COLUMNS',
+                                    startIndex: 0,
+                                    endIndex: SHEET_HEADERS.length,
+                                },
+                            },
+                        },
+                    ],
+                },
             });
 
-            await logDebug(`  [GSheets] Created new spreadsheet: "${spreadsheetName}" (${spreadsheetId})`);
+            await logDebug(
+                `  [GSheets] Created new spreadsheet: "${spreadsheetName}" (${spreadsheetId})`,
+            );
             return spreadsheetId;
         } catch (err: any) {
             await logDebug(`  [GSheets] Error creating spreadsheet: ${err.message}`);
@@ -237,10 +270,10 @@ export class GoogleSheetsService {
     async findOrCreateSpreadsheet(jobName: string, companyName: string): Promise<string> {
         const cName = companyName.trim().toLowerCase().replace(/\s+/g, '_');
         const rName = jobName.trim().toLowerCase().replace(/\s+/g, '_');
-        
+
         const companyFolderId = await this.findOrCreateFolder(cName, ROOT_FOLDER_ID);
         const roleFolderId = await this.findOrCreateFolder(rName, companyFolderId);
-        
+
         const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
         const spreadsheetName = `${rName}_${dateStr}`;
 
@@ -258,12 +291,13 @@ export class GoogleSheetsService {
         try {
             const res = await this.sheets!.spreadsheets.values.get({
                 spreadsheetId,
-                range: 'Candidates!G:G'
+                range: 'Candidates!G:G',
             });
 
             const rows = res.data.values || [];
             const urls = new Set<string>();
-            for (let i = 1; i < rows.length; i++) { // skip header
+            for (let i = 1; i < rows.length; i++) {
+                // skip header
                 if (rows[i][0]) urls.add(rows[i][0]);
             }
             return urls;
@@ -285,8 +319,11 @@ export class GoogleSheetsService {
             current_company?: string;
             location?: string;
         }>,
-        riskData: Record<string, { hazard: number; move_prob: number; tenure: number; median_tenure?: number }>,
-        sharedWith: string
+        riskData: Record<
+            string,
+            { hazard: number; move_prob: number; tenure: number; median_tenure?: number }
+        >,
+        sharedWith: string,
     ): Promise<number> {
         await this.ensureClients();
 
@@ -308,14 +345,16 @@ export class GoogleSheetsService {
                 risk ? risk.tenure.toFixed(1) : 'N/A',
                 url,
                 c.location || '',
-                '',  // Contacted By — left empty for manual input
+                '', // Contacted By — left empty for manual input
                 sharedWith,
-                now
+                now,
             ]);
         }
 
         if (newRows.length === 0) {
-            await logDebug(`  [GSheets] No new candidates to append (all ${candidates.length} already exist in sheet).`);
+            await logDebug(
+                `  [GSheets] No new candidates to append (all ${candidates.length} already exist in sheet).`,
+            );
             return 0;
         }
 
@@ -326,11 +365,13 @@ export class GoogleSheetsService {
                 valueInputOption: 'RAW',
                 insertDataOption: 'INSERT_ROWS',
                 requestBody: {
-                    values: newRows
-                }
+                    values: newRows,
+                },
             });
 
-            await logDebug(`  [GSheets] Appended ${newRows.length} new candidates (skipped ${candidates.length - newRows.length} duplicates).`);
+            await logDebug(
+                `  [GSheets] Appended ${newRows.length} new candidates (skipped ${candidates.length - newRows.length} duplicates).`,
+            );
             return newRows.length;
         } catch (err: any) {
             await logDebug(`  [GSheets] Error appending candidates: ${err.message}`);
@@ -353,26 +394,33 @@ export class GoogleSheetsService {
             location?: string;
         },
         existingUrls: Set<string>,
-        sharedWith: string
+        sharedWith: string,
     ): Promise<boolean> {
         await this.ensureClients();
 
         const url = candidate.profile_url || '';
-        if (!url || existingUrls.has(url)) return false;
+        if (!url) return false;
+
+        // B17: reserve the URL *before* the await. The previous order was
+        // has() -> await append() -> add(), so two concurrent members of a
+        // screening wave could both pass the check and both insert, producing
+        // duplicate rows. Claiming the slot synchronously closes that window.
+        if (existingUrls.has(url)) return false;
+        existingUrls.add(url);
 
         const now = new Date().toISOString();
         const row = [
             candidate.name || 'Unknown',
             candidate.headline || '',
             candidate.current_company || '',
-            'N/A',  // Move Prob — backfilled after batch attrition scoring
-            'N/A',  // Hazard
-            'N/A',  // Tenure
+            'N/A', // Move Prob — backfilled after batch attrition scoring
+            'N/A', // Hazard
+            'N/A', // Tenure
             url,
             candidate.location || '',
-            '',      // Contacted By
+            '', // Contacted By
             sharedWith,
-            now
+            now,
         ];
 
         try {
@@ -382,14 +430,15 @@ export class GoogleSheetsService {
                 valueInputOption: 'RAW',
                 insertDataOption: 'INSERT_ROWS',
                 requestBody: {
-                    values: [row]
-                }
+                    values: [row],
+                },
             });
 
-            existingUrls.add(url); // Track so subsequent calls don't re-insert
             await logDebug(`  [GSheets] ✅ Inserted: ${candidate.name}`);
             return true;
         } catch (err: any) {
+            // Release the reservation so a later retry can insert this row.
+            existingUrls.delete(url);
             await logDebug(`  [GSheets] Error inserting ${candidate.name}: ${err.message}`);
             return false;
         }
@@ -401,7 +450,7 @@ export class GoogleSheetsService {
      */
     async backfillRiskScores(
         spreadsheetId: string,
-        riskData: Record<string, { hazard: number; move_prob: number; tenure: number }>
+        riskData: Record<string, { hazard: number; move_prob: number; tenure: number }>,
     ): Promise<void> {
         await this.ensureClients();
 
@@ -411,23 +460,27 @@ export class GoogleSheetsService {
             // Read all rows to find matching URLs
             const res = await this.sheets!.spreadsheets.values.get({
                 spreadsheetId,
-                range: 'Candidates!A:K'
+                range: 'Candidates!A:K',
             });
 
             const rows = res.data.values || [];
             const updates: { range: string; values: any[][] }[] = [];
 
-            for (let i = 1; i < rows.length; i++) { // skip header
+            for (let i = 1; i < rows.length; i++) {
+                // skip header
                 const url = rows[i][6]; // Column G = Profile URL
                 const risk = riskData[url];
-                if (risk && (rows[i][3] === 'N/A' || !rows[i][3])) { // Column D = Move Prob
+                if (risk && (rows[i][3] === 'N/A' || !rows[i][3])) {
+                    // Column D = Move Prob
                     updates.push({
                         range: `Candidates!D${i + 1}:F${i + 1}`,
-                        values: [[
-                            (risk.move_prob * 100).toFixed(2),
-                            risk.hazard.toFixed(2),
-                            risk.tenure.toFixed(1)
-                        ]]
+                        values: [
+                            [
+                                (risk.move_prob * 100).toFixed(2),
+                                risk.hazard.toFixed(2),
+                                risk.tenure.toFixed(1),
+                            ],
+                        ],
                     });
                 }
             }
@@ -437,10 +490,12 @@ export class GoogleSheetsService {
                     spreadsheetId,
                     requestBody: {
                         valueInputOption: 'RAW',
-                        data: updates
-                    }
+                        data: updates,
+                    },
                 });
-                await logDebug(`  [GSheets] Backfilled risk scores for ${updates.length} candidates.`);
+                await logDebug(
+                    `  [GSheets] Backfilled risk scores for ${updates.length} candidates.`,
+                );
             }
         } catch (err: any) {
             await logDebug(`  [GSheets] Error backfilling risk scores: ${err.message}`);

@@ -1,38 +1,53 @@
 import { Meilisearch } from 'meilisearch';
-import dotenv from 'dotenv';
-import { logDebug } from '../utils/logger';
+import { config } from '../config';
+import { logDebug, logWarn } from '../utils/logger';
 
-import { z } from 'zod';
+const MEILI_INDEX = config.MEILI_INDEX;
 
-import path from 'path';
-
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // Adjust relative path as needed
-
-const MEILI_URL = process.env.MEILI_URL || 'http://localhost:7700';
-const MEILI_KEY = process.env.MEILI_KEY;
-const MEILI_INDEX = process.env.MEILI_INDEX || 'candidates';
-
+/**
+ * Server-side Meilisearch client. This holds the privileged key and must never
+ * be exposed to the browser — client search traffic is proxied through
+ * SearchController.meiliSearch instead.
+ */
 export const meiliClient = new Meilisearch({
-    host: MEILI_URL,
-    apiKey: MEILI_KEY
+    host: config.MEILI_URL,
+    apiKey: config.MEILI_KEY,
 });
+
+/** Indexes the API is permitted to query on behalf of a client. */
+export const ALLOWED_INDEXES: ReadonlySet<string> = new Set(['candidates', 'profiles']);
 
 const settingsUpdated = new Map<string, Promise<void>>();
 
-function ensureMaxTotalHits(indexName: string): Promise<void> {
-  if (!settingsUpdated.has(indexName)) {
-    const promise = (async () => {
-      try {
-        const index = meiliClient.index(indexName);
-        const task = await index.updateSettings({ pagination: { maxTotalHits: 100000 } });
-        await meiliClient.waitForTask(task.taskUid);
-      } catch (err) {
-        logDebug(`Failed to update maxTotalHits for ${indexName}`);
-      }
-    })();
-    settingsUpdated.set(indexName, promise);
-  }
-  return settingsUpdated.get(indexName)!;
+/**
+ * Raises Meilisearch's maxTotalHits so deep pagination returns real results.
+ *
+ * This is a privileged settings write and now runs only here, on the server.
+ * The browser used to perform it, which is why the client needed an
+ * admin-grade key in the first place (B2).
+ */
+export function ensureMaxTotalHits(indexName: string): Promise<void> {
+    if (!settingsUpdated.has(indexName)) {
+        const promise = (async () => {
+            try {
+                const index = meiliClient.index(indexName);
+                const task = await index.updateSettings({ pagination: { maxTotalHits: 100_000 } });
+                await meiliClient.tasks.waitForTask(task.taskUid);
+            } catch (err) {
+                logWarn('meili_settings_update_failed', {
+                    index: indexName,
+                    message: (err as Error).message,
+                });
+            }
+        })();
+        settingsUpdated.set(indexName, promise);
+    }
+    return settingsUpdated.get(indexName)!;
+}
+
+/** Applies index settings once at server startup. */
+export async function initMeiliSettings(): Promise<void> {
+    await Promise.all([...ALLOWED_INDEXES].map((i) => ensureMaxTotalHits(i)));
 }
 
 /**
@@ -60,13 +75,15 @@ export async function fetchAllMeiliHits(indexName: string, query: string): Promi
 }
 
 export async function fetchCandidatesHybrid(searchData: any): Promise<any[]> {
-    logDebug("\n--- Pre-Filtering Candidates (Meilisearch Only) ---");
+    logDebug('\n--- Pre-Filtering Candidates (Meilisearch Only) ---');
     const unified: any[] = [];
     const seenUrls = new Set<string>();
 
     logDebug(`  [Meilisearch] Extracting for Keywords: ${searchData.keywords.join(', ')}`);
 
-    const queryTerm = searchData.keywords.map((kw: string) => kw.includes(' ') ? `"${kw}"` : kw).join(' ');
+    const queryTerm = searchData.keywords
+        .map((kw: string) => (kw.includes(' ') ? `"${kw}"` : kw))
+        .join(' ');
     logDebug(`  [Meilisearch] Combined AND Query: \`${queryTerm}\``);
 
     let keywordHitCount = 0;
@@ -93,7 +110,7 @@ export async function fetchCandidatesHybrid(searchData: any): Promise<any[]> {
                         skills: h.skills || 'N/A',
                         language: h.language || 'N/A',
                         licenses: h.licenses || 'N/A',
-                        source: 'profiles'
+                        source: 'profiles',
                     });
                 }
             });
@@ -120,12 +137,14 @@ export async function fetchCandidatesHybrid(searchData: any): Promise<any[]> {
                         skills: h.skills || 'N/A',
                         language: h.language || 'N/A',
                         licenses: h.licenses || 'N/A',
-                        source: 'candidates'
+                        source: 'candidates',
                     });
                 }
             });
         } catch (e: any) {}
-        logDebug(`  [Meilisearch] Query \`${queryTerm}\` yielded ${keywordHitCount} total unique hits across indices.`);
+        logDebug(
+            `  [Meilisearch] Query \`${queryTerm}\` yielded ${keywordHitCount} total unique hits across indices.`,
+        );
     } catch (error: any) {
         logDebug(`  [Meilisearch Error] ${error.message}`);
     }

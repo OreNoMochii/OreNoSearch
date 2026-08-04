@@ -1,23 +1,43 @@
-import { Meilisearch } from 'meilisearch';
+/**
+ * searchClient.ts — browser-side search.
+ *
+ * SECURITY (B2): this module no longer holds a Meilisearch key of any kind.
+ * It previously embedded the **master** key as a string literal, which Vite
+ * inlined into the production bundle, handing every visitor full read/write/
+ * delete over the candidate corpus. All search traffic is now proxied through
+ * /api/meili/search, which is authenticated and keeps the key server-side.
+ */
 
-// Injected at build time from VITE_MEILI_KEY (repo-root .env, loaded via the
-// `envDir` setting in vite.config.ts) so no key is ever committed.
-//
-// SECURITY: anything reaching the browser bundle is public by definition.
-// This must be a search-only key, never the Meilisearch master key.
-const MEILI_KEY = import.meta.env.VITE_MEILI_KEY ?? '';
-
-if (!MEILI_KEY && import.meta.env.DEV) {
-  console.error(
-    '[searchClient] VITE_MEILI_KEY is not set. Add it to the repo-root .env — search requests will fail without it.',
-  );
+interface MeiliSearchResponse<T> {
+  hits: T[];
+  estimatedTotalHits?: number;
+  totalHits?: number;
 }
 
-// Initialize with proxy URL from Vite config
-const client = new Meilisearch({
-  host: window.location.origin + '/meilisearch',
-  apiKey: MEILI_KEY,
-});
+interface MeiliProxyParams {
+  index: string;
+  query: string;
+  limit: number;
+  offset: number;
+  filter?: string;
+}
+
+async function meiliProxy<T>(
+  params: MeiliProxyParams,
+  signal?: AbortSignal,
+): Promise<MeiliSearchResponse<T>> {
+  const res = await fetch('/api/meili/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(params),
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`Search failed (${res.status})`);
+  }
+  return (await res.json()) as MeiliSearchResponse<T>;
+}
 
 export const DEFAULT_ATTRIBUTES = [
   'id',
@@ -65,23 +85,25 @@ interface DocRank {
   [id: string]: number;
 }
 
-const settingsUpdated = new Map<string, Promise<void>>();
-
-function ensureMaxTotalHits(indexName: string): Promise<void> {
-  if (!settingsUpdated.has(indexName)) {
-    const promise = (async () => {
-      try {
-        const index = client.index(indexName);
-        const task = await index.updateSettings({ pagination: { maxTotalHits: 100000 } });
-        await client.tasks.waitForTask(task.taskUid);
-      } catch (err) {
-        console.warn(`Failed to update maxTotalHits for ${indexName}`, err);
-      }
-    })();
-    settingsUpdated.set(indexName, promise);
+/**
+ * Monotonic counter for insertion order.
+ *
+ * B13: rank was previously derived as `Object.keys(docRank).length`, which
+ * walks the whole object on every hit — O(n) inside an O(n) loop, so O(n²)
+ * overall. With perTermLimit defaulting to 5 000 documents per term that is
+ * tens of millions of operations on the main thread.
+ */
+class RankCounter {
+  private next = 0;
+  take(): number {
+    return this.next++;
   }
-  return settingsUpdated.get(indexName)!;
 }
+
+// NOTE: the browser no longer calls updateSettings. Raising Meilisearch's
+// maxTotalHits is a privileged settings write, and needing it was precisely
+// why the client had to carry an admin-grade key. It now runs once on the
+// server at startup instead.
 
 function parseExperienceYears(expStr?: string): number {
   if (!expStr) return 0;
@@ -110,44 +132,48 @@ async function searchTerm(
   perTermLimit: number,
   docStore: DocStore,
   docRank: DocRank,
+  ranker: RankCounter,
   filter?: string,
   indexes = ['profiles', 'candidates']
 ): Promise<Set<string>> {
   const ids = new Set<string>();
   const PAGE_SIZE = 1000;
-  
+
   for (const indexName of indexes) {
       try {
-        await ensureMaxTotalHits(indexName);
-        const index = client.index(indexName);
-        
         let offset = 0;
         let totalFetched = 0;
-        
+
         while (totalFetched < perTermLimit) {
             const limit = Math.min(PAGE_SIZE, perTermLimit - totalFetched);
-            const response = await index.search(`("${term}")`, { limit, offset, filter });
-            
+            const response = await meiliProxy<SearchHit>({
+              index: indexName,
+              query: `("${term}")`,
+              limit,
+              offset,
+              filter,
+            });
+
             const hits = response.hits || [];
             if (hits.length === 0) break;
 
             for (const hit of hits) {
               const hitId = hit.id || hit.profile_url;
               if (!hitId) continue;
-              
-              ids.add(hitId as string);
-              if (!docStore[hitId as string]) {
-                docStore[hitId as string] = hit as SearchHit;
-                docRank[hitId as string] = Object.keys(docRank).length;
+
+              ids.add(hitId);
+              if (!docStore[hitId]) {
+                docStore[hitId] = hit;
+                docRank[hitId] = ranker.take();   // O(1), was O(n)
               }
             }
-            
+
             offset += hits.length;
             totalFetched += hits.length;
             if (hits.length < limit) break; // Reached the end of available hits
         }
       } catch (err) {
-        console.warn(`Index ${indexName} failed for term [${term}]`);
+        console.warn(`Index ${indexName} failed for term [${term}]`, err);
       }
   }
   return ids;
@@ -158,10 +184,13 @@ async function gatherTermSets(
   perTermLimit: number,
   docStore: DocStore,
   docRank: DocRank,
+  ranker: RankCounter,
   filter?: string
 ): Promise<Set<string>[]> {
   const cleaned = terms.map(t => t.trim()).filter(t => t);
-  const promises = cleaned.map(term => searchTerm(term, perTermLimit, docStore, docRank, filter));
+  const promises = cleaned.map(term =>
+    searchTerm(term, perTermLimit, docStore, docRank, ranker, filter)
+  );
   return Promise.all(promises);
 }
 
@@ -182,10 +211,15 @@ function combineSets(
   }
 
   if (mustSets.length > 0) {
-    if (working === null || working.size === 0) {
-      if (working === null) working = new Set<string>(mustSets[0]);
+    // B22: the previous guard read
+    //   if (working === null || working.size === 0) { if (working === null) ... }
+    // where the `working.size === 0` arm could never do anything. Seeding from
+    // the first MUST set when there are no SHOULD terms is the actual intent;
+    // an empty `working` after SHOULD terms correctly yields no results.
+    if (working === null) {
+      working = new Set<string>(mustSets[0]);
     }
-    
+
     for (const s of mustSets) {
       // Intersect: only keep items present in 's'
       const nextWorking = new Set<string>();
@@ -242,6 +276,7 @@ export async function runBooleanSearch(query: SearchQuery): Promise<{ hits: Bool
 
     const docStore: DocStore = {};
     const docRank: DocRank = {};
+    const ranker = new RankCounter();
 
     // Build Meilisearch filter (only numeric/exact filters go here)
     const filterParts: string[] = [];
@@ -255,10 +290,10 @@ export async function runBooleanSearch(query: SearchQuery): Promise<{ hits: Bool
     const meiliFilter = filterParts.length > 0 ? filterParts.join(' AND ') : undefined;
 
     const [shouldSets, extractedMustSets, mustNotSets, groupResults] = await Promise.all([
-        gatherTermSets(shouldTerms, perTermLimit, docStore, docRank, meiliFilter),
-        gatherTermSets(mustTerms, perTermLimit, docStore, docRank, meiliFilter),
-        gatherTermSets(mustNotTerms, perTermLimit, docStore, docRank, meiliFilter),
-        Promise.all(andGroups.map(group => gatherTermSets(group, perTermLimit, docStore, docRank, meiliFilter)))
+        gatherTermSets(shouldTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+        gatherTermSets(mustTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+        gatherTermSets(mustNotTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+        Promise.all(andGroups.map(group => gatherTermSets(group, perTermLimit, docStore, docRank, ranker, meiliFilter)))
     ]);
 
     const mustSets = [...extractedMustSets];
@@ -276,7 +311,7 @@ export async function runBooleanSearch(query: SearchQuery): Promise<{ hits: Bool
 
     if (shouldTerms.length === 0 && mustTerms.length === 0 && andGroups.length === 0) {
         // If there are absolutely no keywords provided, we just want to fetch based on location/filters
-        const allSet = await searchTerm("", perTermLimit, docStore, docRank, meiliFilter);
+        const allSet = await searchTerm("", perTermLimit, docStore, docRank, ranker, meiliFilter);
         shouldSets.push(allSet);
     }
     if (shouldSets.length === 0 && mustSets.length === 0) {

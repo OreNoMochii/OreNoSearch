@@ -13,7 +13,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from config import DEFAULT_TOP_N, DEFAULT_TOP_K
+from config import DEFAULT_TOP_N, DEFAULT_TOP_K, LLM_MODEL
+from db import close_pools, vector_cursor
 from stage1_query_expansion import expand_jd
 from stage2_hybrid_retrieval import hybrid_retrieve
 from stage3_reranker import rerank
@@ -29,7 +30,9 @@ from stage4_llm_audit import llm_audit
 async def lifespan(app: FastAPI):
     print("[Startup] Retrieval service ready (models load lazily on first request).")
     yield
-    # Shutdown: nothing to clean up
+    # Shutdown: release pooled DB connections (B9).
+    close_pools()
+    print("[Shutdown] Connection pools closed.")
 
 
 app = FastAPI(
@@ -87,20 +90,17 @@ async def health():
 @app.get("/status")
 async def status():
     import embedder, stage3_reranker
-    from config import LLM_MODEL
     # Check vector DB count
     vec_count = 0
     try:
-        import psycopg2
-        from config import VECTOR_DB
-        conn = psycopg2.connect(**VECTOR_DB)
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM candidate_embeddings")
-        vec_count = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
+        with vector_cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM candidate_embeddings")
+            row = cur.fetchone()
+            vec_count = row["n"] if row else 0
+    except Exception as exc:
+        # Previously `except Exception: pass` — a silent swallow that made an
+        # unreachable vector DB indistinguishable from an empty one.
+        print(f"[status] vector DB count unavailable: {exc}")
     return {
         "embedding_model_loaded": embedder._model is not None,
         "reranker_model_loaded":  stage3_reranker._reranker is not None,

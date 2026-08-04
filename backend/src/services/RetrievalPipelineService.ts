@@ -1,11 +1,12 @@
-import { logDebug } from '../utils/logger';
+import { logInfo, logWarn, logError } from '../utils/logger';
+import { config } from '../config';
 
 /**
  * RetrievalPipelineService.ts
- * 
+ *
  * Thin TypeScript wrapper around the Python FastAPI retrieval microservice
  * running at http://localhost:8765.
- * 
+ *
  * Features:
  *  - Health check before calling /search
  *  - 5-minute timeout for the full pipeline
@@ -13,7 +14,7 @@ import { logDebug } from '../utils/logger';
  *    and OutreachService falls back to the standard Meilisearch path
  */
 
-const PIPELINE_BASE = 'http://localhost:8765';
+const PIPELINE_BASE = config.RETRIEVAL_SERVICE_URL;
 
 export interface PipelineCandidate {
     profile_url: string;
@@ -46,7 +47,6 @@ export interface PipelineSearchResponse {
 }
 
 export class RetrievalPipelineService {
-
     /**
      * Check if the microservice is running and healthy.
      * Returns false (instead of throwing) so callers can fall back gracefully.
@@ -54,7 +54,7 @@ export class RetrievalPipelineService {
     async isHealthy(): Promise<boolean> {
         try {
             const resp = await fetch(`${PIPELINE_BASE}/health`, {
-                signal: AbortSignal.timeout(3000),
+                signal: AbortSignal.timeout(3_000),
             });
             return resp.ok;
         } catch {
@@ -64,7 +64,7 @@ export class RetrievalPipelineService {
 
     /**
      * Run the full 4-stage pipeline.
-     * 
+     *
      * @param jd      Full job description text
      * @param topN    Stage 2 retrieval pool size (50–500)
      * @param topK    Stage 3 reranked shortlist size (10–100)
@@ -79,8 +79,9 @@ export class RetrievalPipelineService {
         minExp?: number,
         maxExp?: number,
     ): Promise<PipelineSearchResponse | null> {
+        const started = Date.now();
         try {
-            await logDebug(`[Pipeline] Calling retrieval microservice | top_n=${topN} | top_k=${topK}${companyName ? ` | company=${companyName}` : ''}${model ? ` | model=${model}` : ''}${minExp !== undefined ? ` | min_exp=${minExp}` : ''}${maxExp !== undefined ? ` | max_exp=${maxExp}` : ''}`);
+            logInfo('pipeline_request', { topN, topK, companyName, model, minExp, maxExp });
 
             const resp = await fetch(`${PIPELINE_BASE}/search`, {
                 method: 'POST',
@@ -94,24 +95,42 @@ export class RetrievalPipelineService {
                     min_years: minExp,
                     max_years: maxExp,
                 }),
+                // B11: the doc comment above has always promised a 5-minute
+                // timeout, but no signal was ever passed. A stalled microservice
+                // hung this fetch indefinitely, and because the call happens
+                // inside a queued batch, the concurrency slot was never released.
+                signal: AbortSignal.timeout(config.RETRIEVAL_TIMEOUT_MS),
             });
 
             if (!resp.ok) {
                 const body = await resp.text();
-                await logDebug(`[Pipeline] Error response ${resp.status}: ${body}`);
+                logWarn('pipeline_error_response', {
+                    status: resp.status,
+                    body: body.slice(0, 500),
+                });
                 return null;
             }
 
-            const data: PipelineSearchResponse = await resp.json();
-            await logDebug(
-                `[Pipeline] ✅ Pipeline complete | retrieved=${data.meta.total_retrieved} | ` +
-                `reranked=${data.meta.after_rerank} | passed=${data.meta.passed_audit} | ` +
-                `duration=${data.meta.duration_seconds}s`
-            );
-            return data;
+            const data = (await resp.json()) as PipelineSearchResponse;
 
-        } catch (err: any) {
-            await logDebug(`[Pipeline] ⚠️ Failed to reach microservice: ${err.message}`);
+            // Guard against a shape change silently producing NaN downstream.
+            if (!data?.meta || !Array.isArray(data.candidates)) {
+                logWarn('pipeline_malformed_response');
+                return null;
+            }
+
+            logInfo('pipeline_complete', {
+                retrieved: data.meta.total_retrieved,
+                reranked: data.meta.after_rerank,
+                passed: data.meta.passed_audit,
+                durationMs: Date.now() - started,
+            });
+            return data;
+        } catch (err) {
+            const isTimeout = (err as Error).name === 'TimeoutError';
+            logError(isTimeout ? 'pipeline_timeout' : 'pipeline_unreachable', err, {
+                elapsedMs: Date.now() - started,
+            });
             return null;
         }
     }

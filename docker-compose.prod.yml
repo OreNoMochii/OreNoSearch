@@ -1,0 +1,154 @@
+# Production overlay.
+#
+# Differences from the development docker-compose.yml:
+#   - datastores are not published to the host; they are reachable only on the
+#     internal network
+#   - credentials come from Docker secrets rather than environment defaults
+#   - Meilisearch runs with MEILI_ENV=production
+#   - pgAdmin is absent entirely (it shipped with admin@admin.com / admin)
+#   - containers run unprivileged with resource limits and log rotation
+#
+# Usage:  docker compose -f docker-compose.prod.yml up -d
+name: metaview
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+x-hardening: &hardening
+  security_opt:
+    - 'no-new-privileges:true'
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    image: postgres:15.8-alpine
+    container_name: metaview_db
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+    secrets: [db_user, db_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/migrations:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$(cat /run/secrets/db_user)" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 4G }
+    logging: *default-logging
+    restart: unless-stopped
+
+  pgvector_search:
+    image: pgvector/pgvector:pg15
+    container_name: metaview_vectordb
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/vector_db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/vector_db_password
+      POSTGRES_DB: ${VECTOR_DB_NAME:?VECTOR_DB_NAME is required}
+    secrets: [vector_db_user, vector_db_password]
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$(cat /run/secrets/vector_db_user)"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 4G }
+    logging: *default-logging
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: meilisearch
+    environment:
+      MEILI_MASTER_KEY_FILE: /run/secrets/meili_key
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: 'true'
+    secrets: [meili_key]
+    volumes:
+      - meilisearch_data:/meili_data
+    networks: [backend]
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 2G }
+    logging: *default-logging
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      DB_HOST: postgres
+      MEILI_URL: http://meilisearch:7700
+      RETRIEVAL_SERVICE_URL: http://retrieval:8765
+      ML_SCORING_URL: http://retrieval:8000
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required in production}
+    env_file:
+      - .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      meilisearch: { condition: service_started }
+    networks: [backend, frontend]
+    read_only: true
+    tmpfs: [/tmp]
+    <<: *hardening
+    deploy:
+      # NOTE: replicas > 1 is only safe once the batch queue is durable.
+      # The current queue lives in process memory, so each replica would run
+      # its own concurrency budget and double-send outreach email.
+      replicas: 1
+      resources:
+        limits: { cpus: '1.0', memory: 1G }
+    logging: *default-logging
+    restart: unless-stopped
+
+  retrieval:
+    build:
+      context: ./machine_learning/retrieval_service
+    environment:
+      DB_HOST: postgres
+      VECTOR_DB_HOST: pgvector_search
+      MEILI_URL: http://meilisearch:7700
+    env_file:
+      - .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      pgvector_search: { condition: service_healthy }
+    networks: [backend]
+    <<: *hardening
+    deploy:
+      resources:
+        limits: { cpus: '4.0', memory: 8G }
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true # no egress path from the data tier
+  frontend: {}
+
+secrets:
+  db_user: { file: ./secrets/db_user.txt }
+  db_password: { file: ./secrets/db_password.txt }
+  vector_db_user: { file: ./secrets/vector_db_user.txt }
+  vector_db_password: { file: ./secrets/vector_db_password.txt }
+  meili_key: { file: ./secrets/meili_key.txt }
+
+volumes:
+  postgres_data:
+  pgvector_data:
+  meilisearch_data:

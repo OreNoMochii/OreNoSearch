@@ -1,54 +1,82 @@
 import { zodResponseFormat } from 'openai/helpers/zod';
-import { getClient } from '../core/llm_client';
-import { logDebug, logSkipped } from '../utils/logger';
-import { CandidateMatch, VerificationMatch } from '../core/schemas';
+import { getClient, normaliseModelId } from '../core/llm_client';
+import { logInfo, logWarn, logError } from '../utils/logger';
+import { VerificationMatch, VerificationResponse } from '../core/schemas';
+import { MinGapRateLimiter } from '../utils/rate_limiter';
 import path from 'path';
 import fs from 'fs';
-import { z } from 'zod';
 
-// ── Global rate-limiter: enforces a minimum gap between any two LLM requests ──
-let _lastRequestTime = 0;
-const MIN_REQUEST_GAP_MS = 1500; // 1.5s between requests to stay under ~40 RPM
-
-async function acquireSlot(): Promise<void> {
-    const now = Date.now();
-    const elapsed = now - _lastRequestTime;
-    if (elapsed < MIN_REQUEST_GAP_MS) {
-        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_GAP_MS - elapsed));
-    }
-    _lastRequestTime = Date.now();
-}
+// ── Per-provider rate limiting (B6) ─────────────────────────────────────────
+// NVIDIA NIM's free tier allows roughly 40 requests/minute, hence the 1.5s gap.
+const nvidiaLimiter = new MinGapRateLimiter(1_500);
+const defaultLimiter = new MinGapRateLimiter(100);
 
 const ROLE_CATEGORIES_MAP = {
     'Software Engineering': ['engineer', 'developer', 'tech lead'],
-    'Cloud & Infrastructure': ['cloud', 'solution architect', 'sre', 'devops', 'infrastructure', 'systems engineer', 'architect'],
-    'Sales & Business Development': ['account executive', 'sales', 'sdr', 'bDR', 'business development', 'ae'],
+    'Cloud & Infrastructure': [
+        'cloud',
+        'solution architect',
+        'sre',
+        'devops',
+        'infrastructure',
+        'systems engineer',
+        'architect',
+    ],
+    'Sales & Business Development': [
+        'account executive',
+        'sales',
+        'sdr',
+        'bDR',
+        'business development',
+        'ae',
+    ],
     'Product Management': ['product manager', 'pm', 'product owner'],
     'Data Science': ['data scientist', 'data analyst', 'statistician', 'quantitative'],
-    'ML & AI Engineering': ['machine learning', 'ai researcher', 'ml engineer', 'nlp', 'computer vision'],
-    'Finance & Executive': ['cfo', 'finance', 'ceo', 'founder', 'managing director', 'general manager'],
-    'Customer Success & Ops': ['customer success', 'operations', 'csm', 'support']
+    'ML & AI Engineering': [
+        'machine learning',
+        'ai researcher',
+        'ml engineer',
+        'nlp',
+        'computer vision',
+    ],
+    'Finance & Executive': [
+        'cfo',
+        'finance',
+        'ceo',
+        'founder',
+        'managing director',
+        'general manager',
+    ],
+    'Customer Success & Ops': ['customer success', 'operations', 'csm', 'support'],
 };
 
 function getAtlasBenchmark(jdText: string) {
     try {
         const atlasPath = path.join(process.cwd(), 'data', 'role_atlas.json');
-        if (!fs.existsSync(atlasPath)) return "";
+        if (!fs.existsSync(atlasPath)) return '';
         const atlas = JSON.parse(fs.readFileSync(atlasPath, 'utf8'));
 
         let category = 'Other';
         const lowJD = jdText.toLowerCase();
         for (const [cat, keywords] of Object.entries(ROLE_CATEGORIES_MAP)) {
-            if (keywords.some(kw => lowJD.includes(kw))) {
+            if (keywords.some((kw) => lowJD.includes(kw))) {
                 category = cat;
                 break;
             }
         }
 
         let seniority = 'Mid-Level';
-        if (lowJD.includes('senior') || lowJD.includes('lead') || lowJD.includes('staff')) seniority = 'Senior';
-        if (lowJD.includes('chief') || lowJD.includes('vp') || lowJD.includes('executive') || lowJD.includes('head')) seniority = 'Executive';
-        if (lowJD.includes('junior') || lowJD.includes('entry') || lowJD.includes('intern')) seniority = 'Junior';
+        if (lowJD.includes('senior') || lowJD.includes('lead') || lowJD.includes('staff'))
+            seniority = 'Senior';
+        if (
+            lowJD.includes('chief') ||
+            lowJD.includes('vp') ||
+            lowJD.includes('executive') ||
+            lowJD.includes('head')
+        )
+            seniority = 'Executive';
+        if (lowJD.includes('junior') || lowJD.includes('entry') || lowJD.includes('intern'))
+            seniority = 'Junior';
 
         const key = `${category} | ${seniority}`;
         const benchmark = atlas[key];
@@ -57,19 +85,23 @@ function getAtlasBenchmark(jdText: string) {
             return `\n## ROLE BENCHMARK (REFERENCE ONLY)\nPattern for ${key}:\n- Typical Score: ${benchmark.benchmark_score}/100\n- Gold Standard Examples:\n  ${benchmark.examples.map((ex: string) => `  * [REFERENCE] ${ex}`).join('\n  ')}\n`;
         }
     } catch (e) {
-        console.error("Error loading role atlas:", e);
+        console.error('Error loading role atlas:', e);
     }
-    return "";
+    return '';
 }
 
 export class ScreeningAgent {
-
-    async verificationAgent(jdText: string, candidate: any, model: string = "deepseek-ai/DeepSeek-V3.2", adjacentRoles: string = ""): Promise<{ isMatch: boolean; reasoning: string; auditJson?: string; rateLimited?: boolean }> {
+    async verificationAgent(
+        jdText: string,
+        candidate: any,
+        model: string = 'deepseek-ai/DeepSeek-V3.2',
+        adjacentRoles: string = '',
+    ): Promise<{ isMatch: boolean; reasoning: string; auditJson?: string; rateLimited?: boolean }> {
         const name = candidate.name || 'Unknown';
         const benchmarkSection = getAtlasBenchmark(jdText);
         const adjacentRolesPrompt = adjacentRoles
             ? `\nAdjacent Roles: You MUST also consider titles like ${adjacentRoles} as functionally equivalent to the target role if the candidate's skills align. Focus on core competencies and functional alignment over nominal job titles.\n`
-            : "";
+            : '';
 
         const systemPrompt = `
 You are an expert Talent Sourcing Consultant. Your mission is to evaluate a candidate's resume against a specific job description.
@@ -149,7 +181,16 @@ JSON
 CRITICAL: If data for a requirement is missing, set evidence_quote to "No evidence found" and score it appropriately. DO NOT omit any fields.`;
 
         // ── Payload Trimming: strip irrelevant fields & truncate long text ──
-        const { raw, phone_number, email, licenses, scraped_at, _treeScore, _langScore, ...screeningData } = candidate;
+        const {
+            raw,
+            phone_number,
+            email,
+            licenses,
+            scraped_at,
+            _treeScore,
+            _langScore,
+            ...screeningData
+        } = candidate;
         if (screeningData.experience && screeningData.experience.length > 3000) {
             screeningData.experience = screeningData.experience.slice(0, 3000) + '... [truncated]';
         }
@@ -163,51 +204,76 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
             screeningData.skills = screeningData.skills.slice(0, 1000) + '... [truncated]';
         }
 
-        const totalExp = candidate.total_working_experience || "";
+        const totalExp = candidate.total_working_experience || '';
         const cleanProfile = JSON.stringify(screeningData);
 
         const isNvidia = model.startsWith('nvidia:');
-        const isLegacyModel = model.includes('stepfun') || model.includes('MiniMax') || model.includes('glm') || model.includes('nemotron-3') || (!isNvidia && model.toLowerCase().includes('deepseek-v4'));
-        const cleanModel = model.startsWith('nvidia:') ? model.replace('nvidia:', '') : model;
+        const isLegacyModel =
+            model.includes('stepfun') ||
+            model.includes('MiniMax') ||
+            model.includes('glm') ||
+            model.includes('nemotron-3') ||
+            (!isNvidia && model.toLowerCase().includes('deepseek-v4'));
+        const cleanModel = normaliseModelId(model);
         const apiClient = getClient(model);
+        const limiter = isNvidia ? nvidiaLimiter : defaultLimiter;
 
         const maxRetries = 5;
         let wasRateLimited = false;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                // Acquire a global rate-limiter slot before every API call
-                await acquireSlot();
+                // B6: atomic slot reservation, serialised across concurrent callers.
+                await limiter.acquire();
 
                 if (attempt > 1) {
-                    logDebug(`  [Verification] Retry ${attempt}/${maxRetries} for ${name}...`);
+                    logInfo('verification_retry', { attempt, maxRetries, name });
                 }
 
-                const displayExp = totalExp ? totalExp : "Not provided. Please calculate total years of experience by carefully analyzing the duration of their past roles in the experience section.";
+                const displayExp = totalExp
+                    ? totalExp
+                    : 'Not provided. Please calculate total years of experience by carefully analyzing the duration of their past roles in the experience section.';
 
                 let requestPayload: any = {
                     model: cleanModel,
                     messages: [
-                        { role: "system", content: systemPrompt + "\n\nCRITICAL: Return ONLY a valid JSON object. No other text." },
-                        { role: "user", content: `CANDIDATE TO SCREEN:\n${cleanProfile}\n\nGROUND TRUTH SENIORITY: ${displayExp}\n\nScreen the candidate above based on the JD and Benchmarks provided in the system instructions.` }
-                    ]
+                        {
+                            role: 'system',
+                            content:
+                                systemPrompt +
+                                '\n\nCRITICAL: Return ONLY a valid JSON object. No other text.',
+                        },
+                        {
+                            role: 'user',
+                            content: `CANDIDATE TO SCREEN:\n${cleanProfile}\n\nGROUND TRUTH SENIORITY: ${displayExp}\n\nScreen the candidate above based on the JD and Benchmarks provided in the system instructions.`,
+                        },
+                    ],
                 };
 
                 if (!isLegacyModel) {
-                    requestPayload.response_format = zodResponseFormat(VerificationMatch, 'verification_match');
+                    requestPayload.response_format = zodResponseFormat(
+                        VerificationMatch,
+                        'verification_match',
+                    );
                 }
 
-                if (model.toLowerCase().includes('gpt-oss-120') || model.toLowerCase().includes('deepseek-v4')) {
-                    requestPayload.max_tokens = 16384; 
-                    if (model.startsWith('nvidia:') && model.toLowerCase().includes('deepseek-v4')) {
-                        requestPayload.reasoning_effort = "max";
+                if (
+                    model.toLowerCase().includes('gpt-oss-120') ||
+                    model.toLowerCase().includes('deepseek-v4')
+                ) {
+                    requestPayload.max_tokens = 16384;
+                    if (
+                        model.startsWith('nvidia:') &&
+                        model.toLowerCase().includes('deepseek-v4')
+                    ) {
+                        requestPayload.reasoning_effort = 'max';
                     } else {
-                        requestPayload.reasoning_effort = "high";
+                        requestPayload.reasoning_effort = 'high';
                     }
                 }
 
                 const completion = await apiClient.chat.completions.create(requestPayload);
                 const content = completion.choices[0].message.content || '';
-                
+
                 let jsonStr = content.trim();
                 jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, '');
                 jsonStr = jsonStr.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '');
@@ -219,67 +285,117 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
                         jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
                     }
                 }
-                const result = JSON.parse(jsonStr);
+                // B7: validate rather than trust. The previous code read
+                // result.final_verdict.includes(...) and
+                // result.candidate_summary.verified_seniority directly, either of
+                // which throws a TypeError on a partial response — landing in the
+                // catch below and burning ~100s of backoff on a failure that
+                // could never succeed.
+                const parsed = VerificationResponse.safeParse(JSON.parse(jsonStr));
+                if (!parsed.success) {
+                    logWarn('llm_schema_violation', {
+                        name,
+                        issues: parsed.error.issues
+                            .slice(0, 3)
+                            .map((i) => `${i.path.join('.')}: ${i.message}`),
+                    });
+                    // Deterministic failure — retrying cannot help.
+                    return {
+                        isMatch: false,
+                        reasoning: `Malformed LLM response: ${parsed.error.issues[0]?.message ?? 'unknown'}`,
+                    };
+                }
+                const result = parsed.data;
 
-                if (!result) return { isMatch: false, reasoning: "No result" };
+                const isMatch = result.final_verdict.toUpperCase().includes('RETAIN');
 
-                const isMatch = result.final_verdict === "RETAIN" || result.final_verdict.includes("RETAIN");
-                
                 // Extract actual reasons for failure from the technical audit
                 let rejectionReasons: string[] = [];
-                if (!isMatch && Array.isArray(result.technical_audit)) {
-                    let failures = result.technical_audit.filter((a: any) => {
-                        const score = parseInt(a.competency_score, 10);
-                        return !isNaN(score) && score <= 2;
+                if (!isMatch && result.technical_audit.length > 0) {
+                    const scoreOf = (a: { competency_score?: string }): number =>
+                        Number.parseInt(a.competency_score ?? '', 10);
+
+                    let failures = result.technical_audit.filter((a) => {
+                        const s = scoreOf(a);
+                        return Number.isFinite(s) && s <= 2;
                     });
-                    
-                    // If no 1s or 2s, but they still got rejected, pull any 3s to see what the weakness was
+
+                    // If no 1s or 2s, pull any 3s to show where the weakness was.
                     if (failures.length === 0) {
-                        failures = result.technical_audit.filter((a: any) => {
-                            const score = parseInt(a.competency_score, 10);
-                            return !isNaN(score) && score <= 3;
+                        failures = result.technical_audit.filter((a) => {
+                            const s = scoreOf(a);
+                            return Number.isFinite(s) && s <= 3;
                         });
                     }
-                    
+
                     if (failures.length > 0) {
-                        rejectionReasons = failures.map((f: any) => `[${f.requirement}: ${f.justification}]`);
-                    } else if (result.adversarial_flags?.risk_details && result.adversarial_flags.risk_details !== "None") {
+                        rejectionReasons = failures.map(
+                            (f) =>
+                                `[${f.requirement ?? 'requirement'}: ${f.justification ?? 'no justification given'}]`,
+                        );
+                    } else if (
+                        result.adversarial_flags.risk_details &&
+                        result.adversarial_flags.risk_details !== 'None'
+                    ) {
                         rejectionReasons.push(`[Risk: ${result.adversarial_flags.risk_details}]`);
                     } else {
-                        rejectionReasons.push(`[General Fit: Evaluated as a mismatch despite passing technicals]`);
+                        rejectionReasons.push('[General Fit: mismatch despite passing technicals]');
                     }
                 }
-                
-                const techFeedback = rejectionReasons.length > 0 
-                    ? ` | Failures: ${rejectionReasons.join(' ')}` 
-                    : '';
 
-                const reasoning = `Verdict: ${result.final_verdict}. Score: ${result.overall_fit_score}. Seniority: ${result.candidate_summary.verified_seniority}${techFeedback}`;
+                const techFeedback =
+                    rejectionReasons.length > 0 ? ` | Failures: ${rejectionReasons.join(' ')}` : '';
+
+                const seniority = result.candidate_summary.verified_seniority ?? 'unspecified';
+                const reasoning =
+                    `Verdict: ${result.final_verdict}. Score: ${result.overall_fit_score}. ` +
+                    `Seniority: ${seniority}${techFeedback}`;
 
                 return { isMatch, reasoning, auditJson: JSON.stringify(result, null, 2) };
-            } catch (error: any) {
-                const is429 = error.status === 429 || (error.message && error.message.includes('429'));
+            } catch (error: unknown) {
+                const err = error as { status?: number; message?: string };
+                const status = err.status;
+                const message = err.message ?? String(error);
+                const is429 = status === 429 || message.includes('429');
                 if (is429) wasRateLimited = true;
 
-                const statusInfo = error.status ? ` (HTTP ${error.status})` : '';
-                logDebug(`  [Attempt ${attempt}/${maxRetries}] Failed for ${name}: ${error.message}${statusInfo}`);
+                // Only retry what a retry could plausibly fix. Previously a 400
+                // (bad request) was retried five times with the same backoff as
+                // a 429, wasting roughly 100 seconds per candidate.
+                const isRetryable =
+                    is429 || status === undefined || status >= 500 || status === 408;
+
+                if (!isRetryable) {
+                    logWarn('llm_non_retryable_error', { name, status, message });
+                    return {
+                        isMatch: false,
+                        reasoning: `LLM error ${status}: ${message}`,
+                        rateLimited: wasRateLimited,
+                    };
+                }
+
+                logWarn('llm_attempt_failed', { name, attempt, maxRetries, status, message });
+
                 if (attempt < maxRetries) {
-                    // Long exponential backoff with jitter specifically tuned for NVIDIA NIM rate limits
-                    // Delays: ~8s, ~15s, ~30s, ~45s — gives the rate-limit window time to fully reset
+                    // Exponential backoff with jitter, tuned for NVIDIA NIM's
+                    // rate-limit window: ~8s, ~15s, ~30s, ~45s.
                     const backoffSeconds = [8, 15, 30, 45];
-                    const baseMs = (backoffSeconds[attempt - 1] || 45) * 1000;
-                    const jitterMs = Math.random() * 5000;
-                    const waitMs = baseMs + jitterMs;
+                    const waitMs =
+                        (backoffSeconds[attempt - 1] ?? 45) * 1000 + Math.random() * 5000;
                     if (is429) {
-                        logDebug(`  [Rate Limit] Backing off ${(waitMs / 1000).toFixed(1)}s before retry...`);
+                        logInfo('llm_backoff', { name, waitSeconds: (waitMs / 1000).toFixed(1) });
                     }
-                    await new Promise(resolve => setTimeout(resolve, waitMs));
+                    await new Promise((resolve) => setTimeout(resolve, waitMs));
                 } else {
-                    return { isMatch: false, reasoning: error.message, rateLimited: wasRateLimited };
+                    return { isMatch: false, reasoning: message, rateLimited: wasRateLimited };
                 }
             }
         }
-        return { isMatch: false, reasoning: "All retry attempts failed", rateLimited: wasRateLimited };
+        return {
+            isMatch: false,
+            reasoning: 'All retry attempts failed',
+            rateLimited: wasRateLimited,
+        };
     }
 }
 

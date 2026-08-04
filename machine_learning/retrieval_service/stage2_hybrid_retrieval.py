@@ -19,9 +19,9 @@ import psycopg2
 import psycopg2.extras
 from meilisearch import Client as MeiliClient
 from embedder import embed_text
+from db import vector_cursor, golden_cursor
 from config import (
-    MEILI_URL, MEILI_KEY, MEILI_INDEX,
-    VECTOR_DB, GOLDEN_DB, RRF_K
+    MEILI_URL, MEILI_KEY, MEILI_INDEX, RRF_K
 )
 
 
@@ -35,16 +35,7 @@ def _get_meili() -> MeiliClient:
     return _meili
 
 
-# ── pgvector connection ──────────────────────────────────────────────────────
-def _vector_conn():
-    return psycopg2.connect(**VECTOR_DB)
-
-
-def _golden_conn():
-    conn = psycopg2.connect(**GOLDEN_DB)
-    conn.set_session(readonly=True)
-    return conn
-
+# Connections come from the pools in db.py — see B9 in that module's docstring.
 
 # ── Meilisearch retrieval ───────────────────────────────────────────────────
 def _fetch_meili(query_terms: list[str], limit: int) -> list[dict]:
@@ -97,21 +88,18 @@ def _fetch_vector(jd_text: str, limit: int) -> list[dict]:
         embedding = embed_text(jd_text)
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-        conn = _vector_conn()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            """
-            SELECT profile_url, name, headline, summary_text, text_blob,
-                   1 - (embedding <=> %s::vector) AS similarity
-            FROM   candidate_embeddings
-            ORDER  BY embedding <=> %s::vector
-            LIMIT  %s
-            """,
-            (vec_str, vec_str, limit * 2),
-        )
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        with vector_cursor() as cur:
+            cur.execute(
+                """
+                SELECT profile_url, name, headline, summary_text, text_blob,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM   candidate_embeddings
+                ORDER  BY embedding <=> %s::vector
+                LIMIT  %s
+                """,
+                (vec_str, vec_str, limit * 2),
+            )
+            rows = cur.fetchall()
 
         return [
             {
@@ -151,20 +139,17 @@ def _enrich_from_golden(candidates: list[dict]) -> list[dict]:
 
     golden_data: dict[str, dict] = {}
     try:
-        conn = _golden_conn()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        # Use ANY to batch-fetch all at once
-        cur.execute(
-            """SELECT profile_url, name, headline, current_company, location,
-                      summary, experience, skills, education, email
-               FROM candidates
-               WHERE profile_url = ANY(%s)""",
-            (urls_to_enrich,)
-        )
-        for row in cur.fetchall():
-            golden_data[row["profile_url"]] = dict(row)
-        cur.close()
-        conn.close()
+        with golden_cursor() as cur:
+            # Use ANY to batch-fetch all at once
+            cur.execute(
+                """SELECT profile_url, name, headline, current_company, location,
+                          summary, experience, skills, education, email
+                   FROM candidates
+                   WHERE profile_url = ANY(%s)""",
+                (urls_to_enrich,)
+            )
+            for row in cur.fetchall():
+                golden_data[row["profile_url"]] = dict(row)
         print(f"  [Stage2] Enriched {len(golden_data)}/{len(urls_to_enrich)} pgvector candidates from golden DB")
     except Exception as exc:
         print(f"  [Stage2] Golden DB enrichment failed: {exc}")
@@ -244,7 +229,7 @@ async def hybrid_retrieve(
     ))
 
     # Run Meilisearch and pgvector in a thread pool (both are sync)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     meili_task   = loop.run_in_executor(None, _fetch_meili,  query_terms, top_n)
     vector_task  = loop.run_in_executor(None, _fetch_vector, jd_text,     top_n)
 

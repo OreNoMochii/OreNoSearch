@@ -1,105 +1,178 @@
 import { Request, Response } from 'express';
-import { logDebug } from '../utils/logger';
+import { config } from '../config';
+import { logInfo, logWarn, logError } from '../utils/logger';
+import { OutreachRequest } from '../core/schemas';
 import { outreachService } from '../services/OutreachService';
 
-const MAX_CONCURRENT_BATCHES = 3;
+interface BatchDetail {
+    size: number;
+    processed: number;
+    owner: string;
+    startedAt: number;
+}
+
+interface QueuedBatch {
+    id: number;
+    task: () => Promise<void>;
+    size: number;
+    owner: string;
+    queuedAt: number;
+}
+
+const MAX_CONCURRENT_BATCHES = config.MAX_CONCURRENT_BATCHES;
+
+export const activeBatchDetails: Map<number, BatchDetail> = new Map();
+const batchQueue: QueuedBatch[] = [];
 let activeBatches = 0;
 let nextBatchId = 1;
 
-export const activeBatchDetails: Map<number, { size: number, processed: number, owner: string }> = new Map();
-const batchQueue: Array<{ id: number, task: () => Promise<void>, size: number, owner: string }> = [];
-
-export class OutreachController {
-
-    static async runNextInQueue() {
-        if (activeBatches >= MAX_CONCURRENT_BATCHES) return;
-        if (batchQueue.length === 0) return;
-
-        const taskObj = batchQueue.shift();
-        if (!taskObj) return;
+/**
+ * Drains the queue up to the concurrency limit.
+ *
+ * B18: the previous version invoked itself as a bare expression in both the
+ * `finally` block and the request handler. Because `runNextInQueue` is async
+ * and awaits the entire campaign, those were floating promises — a rejection
+ * anywhere inside (including from the logger) became an unhandled rejection,
+ * which terminates the process on Node 15+.
+ *
+ * Each task is now given its own terminal catch, and the pump is driven by a
+ * synchronous loop rather than recursion.
+ */
+function pump(): void {
+    while (activeBatches < MAX_CONCURRENT_BATCHES && batchQueue.length > 0) {
+        const batch = batchQueue.shift();
+        if (!batch) return;
 
         activeBatches++;
-        activeBatchDetails.set(taskObj.id, { size: taskObj.size, processed: 0, owner: taskObj.owner });
-        
-        await logDebug(`QueueManager: Starting Batch#${taskObj.id} (${taskObj.size} candidates) for ${taskObj.owner}. Active: ${activeBatches}/${MAX_CONCURRENT_BATCHES}`);
-        
-        try {
-            await taskObj.task();
-        } catch (e: any) {
-            await logDebug(`QueueManager: Batch#${taskObj.id} failed: ${e.message}`);
-        } finally {
-            activeBatches--;
-            activeBatchDetails.delete(taskObj.id);
-            await logDebug(`QueueManager: Batch#${taskObj.id} completed.`);
-            OutreachController.runNextInQueue();
-        }
+        activeBatchDetails.set(batch.id, {
+            size: batch.size,
+            processed: 0,
+            owner: batch.owner,
+            startedAt: Date.now(),
+        });
+
+        logInfo('batch_started', {
+            batchId: batch.id,
+            size: batch.size,
+            active: activeBatches,
+            max: MAX_CONCURRENT_BATCHES,
+            queuedForMs: Date.now() - batch.queuedAt,
+        });
+
+        // Terminal catch: nothing downstream can produce an unhandled rejection.
+        void batch
+            .task()
+            .catch((err: unknown) => logError('batch_failed', err, { batchId: batch.id }))
+            .finally(() => {
+                const detail = activeBatchDetails.get(batch.id);
+                activeBatches--;
+                activeBatchDetails.delete(batch.id);
+                logInfo('batch_completed', {
+                    batchId: batch.id,
+                    processed: detail?.processed ?? 0,
+                    durationMs: detail ? Date.now() - detail.startedAt : undefined,
+                });
+                pump();
+            });
     }
+}
 
-    static async triggerOutreach(req: Request, res: Response) {
-        const { candidates, jd, email, model, adjacentRoles, jobName, companyName, bypassDeduplication, useCompanyIntel, usePipeline, topN, topK, minExp, maxExp, screeningEngine, treeTopK } = req.body;
-
-        if (!usePipeline && screeningEngine !== 'tree' && (!candidates || !Array.isArray(candidates) || candidates.length === 0)) {
-            return res.status(400).json({ error: "Missing or empty 'candidates' array" });
+export class OutreachController {
+    static async triggerOutreach(req: Request, res: Response): Promise<Response> {
+        const parsed = OutreachRequest.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({
+                error: 'Invalid outreach request',
+                details: parsed.error.issues.map((i) => ({
+                    field: i.path.join('.'),
+                    message: i.message,
+                })),
+            });
         }
-        if (!jd || !email || !jobName || !companyName) {
-            return res.status(400).json({ error: "Missing 'jd', 'email', 'jobName', or 'companyName'" });
+        const body = parsed.data;
+
+        // The candidate list may legitimately be empty for pipeline and tree
+        // engines, which source candidates themselves.
+        const needsCandidates = !body.usePipeline && body.screeningEngine === 'llm';
+        if (needsCandidates && body.candidates.length === 0) {
+            return res.status(400).json({
+                error: "The 'llm' screening engine requires a non-empty 'candidates' array",
+            });
         }
 
-        const currentBatchId = nextBatchId++;
-        const targetModel = model || 'deepseek-ai/DeepSeek-V3.2';
-        const pipelineEnabled = usePipeline === true;
-        const resolvedTopN = typeof topN === 'number' ? Math.min(Math.max(topN, 50), 1000) : 700;
-        const resolvedTopK = typeof topK === 'number' ? Math.min(Math.max(topK, 10), 500) : 300;
-        const resolvedScreeningEngine = screeningEngine || 'llm';
-        const resolvedTreeTopK = typeof treeTopK === 'number' ? Math.min(Math.max(treeTopK, 10), 2000) : 1000;
-        
-        await logDebug(`[API] Received outreach request for ${candidates?.length || 0} candidates. Batch ID: ${currentBatchId}, Model: ${targetModel}, Engine: ${resolvedScreeningEngine}, Pipeline: ${pipelineEnabled}${pipelineEnabled ? ` (N=${resolvedTopN}, K=${resolvedTopK})` : ''}`);
+        const batchId = nextBatchId++;
+        const targetModel = body.model ?? 'deepseek-ai/DeepSeek-V3.2';
 
-        const task = async () => {
-            await outreachService.runOutreachCampaign(
-                jd, candidates, companyName, email, targetModel, adjacentRoles, jobName, bypassDeduplication, currentBatchId, undefined, pipelineEnabled, resolvedTopN, resolvedTopK,
-                typeof minExp === 'number' ? minExp : undefined,
-                typeof maxExp === 'number' ? maxExp : undefined,
-                resolvedScreeningEngine,
-                resolvedTreeTopK,
-                useCompanyIntel
-            );
+        logInfo('outreach_requested', {
+            batchId,
+            candidateCount: body.candidates.length,
+            model: targetModel,
+            engine: body.screeningEngine,
+            pipeline: body.usePipeline,
+        });
+
+        const task = async (): Promise<void> => {
+            await outreachService.runOutreachCampaign({
+                jdText: body.jd,
+                uiCandidates: body.candidates,
+                companyName: body.companyName,
+                jobName: body.jobName,
+                recipients: body.email,
+                targetModel,
+                adjacentRoles: body.adjacentRoles ?? '',
+                bypassDeduplication: body.bypassDeduplication,
+                batchId,
+                usePipeline: body.usePipeline,
+                topN: body.topN,
+                topK: body.topK,
+                minExp: body.minExp,
+                maxExp: body.maxExp,
+                screeningEngine: body.screeningEngine,
+                treeTopK: body.treeTopK,
+                useCompanyIntel: body.useCompanyIntel,
+            });
         };
 
         batchQueue.push({
-            id: currentBatchId,
+            id: batchId,
             task,
-            size: candidates?.length || 0,
-            owner: email
+            size: body.candidates.length,
+            owner: body.email,
+            queuedAt: Date.now(),
         });
 
         if (activeBatches >= MAX_CONCURRENT_BATCHES) {
-            await logDebug(`Batch#${currentBatchId} Queued. Position in queue: ${batchQueue.length}`);
+            logWarn('batch_queued', { batchId, queuePosition: batchQueue.length });
         }
 
-        OutreachController.runNextInQueue();
+        pump();
 
         return res.status(202).json({
-            message: "Outreach batch accepted and queued for processing.",
-            batch_id: currentBatchId,
-            queue_status: `Active Batches: ${activeBatches}/${MAX_CONCURRENT_BATCHES}, Pending in Queue: ${batchQueue.length}`
+            message: 'Outreach batch accepted and queued for processing.',
+            batch_id: batchId,
+            queue_status: `Active Batches: ${activeBatches}/${MAX_CONCURRENT_BATCHES}, Pending in Queue: ${batchQueue.length}`,
         });
     }
 
-    static getQueueStatus(req: Request, res: Response) {
-        const activeArray = Array.from(activeBatchDetails.entries()).map(([id, data]) => ({
-            id,
-            size: data.size,
-            processed: data.processed,
-            owner: data.owner
-        }));
-
+    static getQueueStatus(_req: Request, res: Response): void {
         res.json({
             activeCount: activeBatches,
             maxConcurrent: MAX_CONCURRENT_BATCHES,
             pendingCount: batchQueue.length,
-            activeBatches: activeArray,
-            queuedBatches: batchQueue.map(b => ({ id: b.id, size: b.size, owner: b.owner }))
+            activeBatches: Array.from(activeBatchDetails.entries()).map(([id, d]) => ({
+                id,
+                size: d.size,
+                processed: d.processed,
+                owner: d.owner,
+            })),
+            queuedBatches: batchQueue.map((b) => ({ id: b.id, size: b.size, owner: b.owner })),
         });
     }
+}
+
+/** Increments a batch's progress counter if it is still active. */
+export function recordBatchProgress(batchId: number | undefined, delta = 1): void {
+    if (batchId === undefined) return;
+    const detail = activeBatchDetails.get(batchId);
+    if (detail) detail.processed += delta;
 }

@@ -1,0 +1,54 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+    ".venv", "venv", "hf_env", "__pycache__",
+    "machine_learning/scratch",
+    "machine_learning/notebooks",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes  — would have caught the LLM_MODEL NameError (B8)
+    "W",    # warnings
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear   — flags asyncio.get_event_loop() in a coroutine
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+    "S",    # bandit    — flags `except Exception: pass` and subprocess misuse
+]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "S101",    # assert is fine in tests
+    "S608",    # SQL string construction is reviewed case by case
+]
+
+[tool.ruff.lint.per-file-ignores]
+"machine_learning/src/*" = ["N806", "N803"]   # ML code uses X/y naming
+"**/test_*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+no_implicit_optional = true
+ignore_missing_imports = true
+exclude = ["machine_learning/scratch/", "machine_learning/notebooks/", "hf_env/", "venv/"]
+
+[[tool.mypy.overrides]]
+module = ["machine_learning.src.*"]
+ignore_errors = true   # ML training code is exploratory; service code is checked
+
+[tool.pytest.ini_options]
+testpaths = ["machine_learning/retrieval_service", "machine_learning/src"]
+python_files = ["test_*.py"]
+addopts = "-q"

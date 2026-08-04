@@ -1,95 +1,144 @@
 import { google } from 'googleapis';
-import dotenv from 'dotenv';
-import { logDebug } from '../utils/logger';
+import type { gmail_v1 } from 'googleapis';
+import { config } from '../config';
+import { logInfo, logWarn, logError } from '../utils/logger';
 import fs from 'fs';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // Adjust relative path
+/**
+ * Conservative RFC 5322 addr-spec check. Deliberately rejects the characters
+ * that carry meaning inside a header (whitespace, angle brackets, quotes,
+ * comma, semicolon, colon, backslash) rather than trying to accept the full
+ * grammar — this is an outbound allowlist, not a parser.
+ */
+const ADDRESS_RE = /^[^\s@<>",;:\\]+@[^\s@<>",;:\\]+\.[^\s@<>",;:\\]{2,}$/;
 
-const SENDER_NAME = process.env.SENDER_NAME || 'Saori';
-const SENDER_EMAIL = process.env.GMAIL_ADDRESS || '';
+export class InvalidRecipientError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'InvalidRecipientError';
+    }
+}
 
 export class EmailService {
-    private gmailClient: any = null;
-    private initialized = false;
+    private gmailClient: gmail_v1.Gmail | null = null;
 
-    constructor() {
-        this.initClient();
-    }
+    /**
+     * Builds the Gmail client. Called lazily rather than from the constructor,
+     * which previously performed synchronous file I/O at module import time.
+     */
+    private initClient(): gmail_v1.Gmail | null {
+        if (this.gmailClient) return this.gmailClient;
 
-    private initClient() {
         try {
-            const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-            if (!credPath || !credPath.endsWith('client_secret.json')) {
-                logDebug("GOOGLE_APPLICATION_CREDENTIALS is not set or not pointing to client_secret.json.");
-                return;
+            const credPath = config.GOOGLE_APPLICATION_CREDENTIALS;
+            if (!credPath.endsWith('client_secret.json')) {
+                logWarn('email_client_bad_credentials_path', { credPath });
+                return null;
             }
 
-            const content = fs.readFileSync(credPath, 'utf-8');
-            const credentials = JSON.parse(content);
-            const { client_secret, client_id } = credentials.installed || credentials.web;
+            const credentials = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+            const { client_secret, client_id } = credentials.installed ?? credentials.web;
 
             const tokenPath = path.join(path.dirname(credPath), 'token.json');
             if (!fs.existsSync(tokenPath)) {
-                logDebug(`token.json not found at ${tokenPath}. Please run the token generation script.`);
-                return;
+                logWarn('email_token_missing', { tokenPath });
+                return null;
             }
 
-            const tokenContent = fs.readFileSync(tokenPath, 'utf-8');
-            const tokens = JSON.parse(tokenContent);
-
             const oAuth2Client = new google.auth.OAuth2(client_id, client_secret);
-            oAuth2Client.setCredentials(tokens);
+            oAuth2Client.setCredentials(JSON.parse(fs.readFileSync(tokenPath, 'utf-8')));
 
             this.gmailClient = google.gmail({ version: 'v1', auth: oAuth2Client });
-            this.initialized = true;
-        } catch (err: any) {
-            logDebug(`[EmailService Error] Failed to initialize Gmail API client: ${err.message}`);
+            return this.gmailClient;
+        } catch (err) {
+            logError('email_client_init_failed', err);
+            return null;
         }
     }
 
-    async sendEmail(subject: string, body: string, to: string, cc?: string): Promise<boolean> {
-        if (!this.initialized && !this.gmailClient) {
-            this.initClient();
+    /**
+     * Splits, trims and validates a comma-separated address list.
+     *
+     * SECURITY (B3): the raw value is rejected outright if it contains CR or
+     * LF. Recipients arrive from the request body and were previously spliced
+     * straight into RFC-822 headers, so a newline allowed an attacker to inject
+     * arbitrary headers (Bcc, Reply-To) or terminate the header block and forge
+     * a message body.
+     */
+    private parseAddressList(raw: string | undefined, field: string): string[] {
+        if (!raw) return [];
+
+        if (/[\r\n]/.test(raw)) {
+            throw new InvalidRecipientError(
+                `${field} contains a line break — refusing to construct headers`,
+            );
         }
 
-        if (!this.gmailClient) {
-            logDebug("Gmail API client not initialized, cannot send email.");
+        const addresses = raw
+            .split(',')
+            .map((a) => a.trim())
+            .filter(Boolean);
+
+        const invalid = addresses.filter((a) => !ADDRESS_RE.test(a));
+        if (invalid.length > 0) {
+            throw new InvalidRecipientError(
+                `${field} contains ${invalid.length} invalid address(es)`,
+            );
+        }
+        return addresses;
+    }
+
+    /**
+     * Sends a plain-text message via the Gmail API.
+     * Returns false rather than throwing, so a delivery failure cannot mark a
+     * batch of candidates as contacted.
+     */
+    async sendEmail(subject: string, body: string, to: string, cc?: string): Promise<boolean> {
+        const client = this.initClient();
+        if (!client) {
+            logWarn('email_client_unavailable');
+            return false;
+        }
+
+        let toList: string[];
+        let ccList: string[];
+        try {
+            toList = this.parseAddressList(to, 'To');
+            ccList = this.parseAddressList(cc, 'Cc');
+            if (toList.length === 0) {
+                throw new InvalidRecipientError('To list is empty after validation');
+            }
+        } catch (err) {
+            // Fail closed: never attempt a send with unvalidated recipients.
+            logError('email_recipients_rejected', err);
             return false;
         }
 
         try {
-            const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
-            const messageParts = [
-                `From: ${SENDER_NAME} <${SENDER_EMAIL}>`,
-                `To: ${to}`,
-                cc ? `Cc: ${cc}` : '',
+            // RFC 2047 encoding neutralises CR/LF in the subject by construction.
+            const encodedSubject = `=?utf-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+
+            const headers = [
+                `From: ${config.SENDER_NAME} <${config.GMAIL_ADDRESS}>`,
+                `To: ${toList.join(', ')}`,
+                ...(ccList.length > 0 ? [`Cc: ${ccList.join(', ')}`] : []),
                 'Content-Type: text/plain; charset=utf-8',
                 'MIME-Version: 1.0',
-                `Subject: ${utf8Subject}`,
-                '',
-                body
+                `Subject: ${encodedSubject}`,
             ];
 
-            // Remove empty lines for headers (like empty cc)
-            const message = messageParts.filter(part => part !== '').join('\n');
-            const encodedMessage = Buffer.from(message)
-                .toString('base64')
-                .replace(/\+/g, '-')
-                .replace(/\//g, '_')
-                .replace(/=+$/, '');
+            // RFC 5322 mandates CRLF line endings between headers.
+            const raw = Buffer.from(`${headers.join('\r\n')}\r\n\r\n${body}`, 'utf8').toString(
+                'base64url',
+            );
 
-            await this.gmailClient.users.messages.send({
-                userId: 'me',
-                requestBody: {
-                    raw: encodedMessage
-                }
-            });
+            await client.users.messages.send({ userId: 'me', requestBody: { raw } });
 
-            logDebug(`  [Email Sent] Successfully sent to ${to} via Gmail API`);
+            logInfo('email_sent', { recipientCount: toList.length, ccCount: ccList.length });
             return true;
-        } catch (error: any) {
-            logDebug(`  [Email Error] ${error.message}`);
+        } catch (err) {
+            logError('email_send_failed', err, { recipientCount: toList.length });
             return false;
         }
     }

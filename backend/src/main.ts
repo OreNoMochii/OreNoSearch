@@ -1,65 +1,184 @@
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import { logDebug } from './utils/logger';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { timingSafeEqual, createHash } from 'crypto';
+
+import { config, isProduction } from './config';
+import { logInfo, logWarn, logError, logger } from './utils/logger';
 import { OutreachController } from './controllers/OutreachController';
-
-import path_mod from 'path';
-
-dotenv.config({ path: path_mod.resolve(__dirname, '../../.env') }); // Adjust relative path based on context
+import { SearchController } from './controllers/SearchController';
+import { pool, shutdownPool } from './repositories/postgres_repo';
+import { initMeiliSettings } from './repositories/meilisearch_repo';
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
-app.use(cors());
 
-// --- Logging Middleware ---
+app.disable('x-powered-by');
+app.set('trust proxy', 1); // required for correct req.ip behind the Vite proxy
+app.use(helmet());
+
+app.use(
+    cors({
+        // B4: `cors()` with no arguments emits Access-Control-Allow-Origin: *
+        // on an authenticated API. Origins are now an explicit allowlist.
+        origin: config.ALLOWED_ORIGINS,
+        credentials: true,
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        maxAge: 86_400,
+    }),
+);
+
+// ── Health probes — before auth so orchestrators can reach them ─────────────
+app.get('/healthz', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+});
+
+app.get('/readyz', async (_req, res) => {
+    try {
+        await pool.query('SELECT 1');
+        res.status(200).json({ status: 'ready' });
+    } catch (err) {
+        logError('readiness_check_failed', err);
+        res.status(503).json({ status: 'not-ready' });
+    }
+});
+
+// ── Request logging ─────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-    const start = Date.now();
-    const { method, path } = req;
-    const remoteAddr = req.socket.remoteAddress || '';
-    const cleanIp = remoteAddr.replace(/^.*:/, '');
-    const origin = req.get('origin') || 'no-origin';
-
-    res.on('finish', async () => {
-        if (path === '/api/queue-status') return; // Silence polling logs
-        const duration = Date.now() - start;
-        const status = res.statusCode;
-        const logMsg = `[REQUEST] ${method} ${path} | Status: ${status} | IP: ${cleanIp} | Origin: ${origin} | Duration: ${duration}ms`;
-        logDebug(logMsg);
+    const started = Date.now();
+    res.on('finish', () => {
+        if (req.path === '/api/queue-status' || req.path === '/healthz') return;
+        logInfo('request', {
+            method: req.method,
+            path: req.path,
+            status: res.statusCode,
+            durationMs: Date.now() - started,
+            ip: req.ip,
+        });
     });
     next();
 });
 
-// --- Basic Authentication Middleware ---
-app.use((req, res, next) => {
+// ── Authentication ──────────────────────────────────────────────────────────
+/**
+ * Constant-time credential comparison.
+ *
+ * B4: the previous check used `===`, whose early exit leaks the length of the
+ * matching prefix through response timing. Hashing first guarantees both
+ * operands are 32 bytes, so timingSafeEqual cannot throw on length mismatch.
+ */
+function safeEqual(a: string, b: string): boolean {
+    return timingSafeEqual(
+        createHash('sha256').update(a, 'utf8').digest(),
+        createHash('sha256').update(b, 'utf8').digest(),
+    );
+}
+
+function challenge(res: express.Response): void {
+    res.set('WWW-Authenticate', 'Basic realm="Metaview API", charset="UTF-8"');
+    res.status(401).json({ error: 'Authentication required' });
+}
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many authentication attempts' },
+});
+
+app.use(authLimiter, (req, res, next) => {
     if (req.method === 'OPTIONS') return next();
 
-    const API_USER = process.env.API_USER || 'admin';
-    const API_PASS = process.env.API_PASS || 'pass123';
+    const header = req.headers.authorization ?? '';
+    if (!header.startsWith('Basic ')) return challenge(res);
 
-    const auth = { login: API_USER, password: API_PASS };
-    const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
-    const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    // Split on the FIRST colon only — a password may legitimately contain one.
+    const sep = decoded.indexOf(':');
+    if (sep === -1) return challenge(res);
 
-    if (login && password && login === auth.login && password === auth.password) {
-        return next();
-    }
+    // Both comparisons always run: no early exit on a wrong username.
+    const okUser = safeEqual(decoded.slice(0, sep), config.API_USER);
+    const okPass = safeEqual(decoded.slice(sep + 1), config.API_PASS);
 
-    res.set('WWW-Authenticate', 'Basic realm="Metaview API"');
-    res.status(401).send('Authentication required.');
+    if (okUser && okPass) return next();
+
+    logWarn('auth_failed', { ip: req.ip, path: req.path });
+    return challenge(res);
 });
 
-import { SearchController } from './controllers/SearchController';
+// ── Body parsing — deliberately AFTER auth ──────────────────────────────────
+// B4: the previous order let an unauthenticated client make the server buffer
+// and parse a 50 MB JSON body before the 401 was issued.
+app.use(express.json({ limit: config.MAX_BODY_SIZE }));
 
-// --- Routes ---
-app.post('/api/outreach', OutreachController.triggerOutreach);
+// ── Routes ──────────────────────────────────────────────────────────────────
+const outreachLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+});
+
+app.post('/api/outreach', outreachLimiter, OutreachController.triggerOutreach);
 app.get('/api/queue-status', OutreachController.getQueueStatus);
 app.post('/api/search', SearchController.runSearch);
+app.post('/api/meili/search', SearchController.meiliSearch);
 app.get('/api/locations', SearchController.getLocations);
 
-// --- Server Init ---
-const PORT = parseInt(process.env.PORT || '3001', 10);
-app.listen(PORT, '127.0.0.1', () => {
-    logDebug(`Server running on port ${PORT}`);
-    console.log(`Server running on port ${PORT}`);
+// ── Terminal error handler ──────────────────────────────────────────────────
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    logError('unhandled_route_error', err);
+    res.status(500).json({ error: 'Internal server error' });
 });
+
+// ── Startup ─────────────────────────────────────────────────────────────────
+const server = app.listen(config.PORT, config.HOST, () => {
+    logInfo('server_started', {
+        port: config.PORT,
+        host: config.HOST,
+        env: config.NODE_ENV,
+        allowedOrigins: config.ALLOWED_ORIGINS,
+    });
+
+    // Index settings are applied here rather than from the browser — needing
+    // this write is why the client previously carried an admin key (B2).
+    void initMeiliSettings().catch((err) => logError('meili_settings_init_failed', err));
+});
+
+// ── Graceful shutdown ───────────────────────────────────────────────────────
+// Previously absent entirely: SIGTERM killed in-flight campaigns mid-write.
+let shuttingDown = false;
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        logInfo('shutdown_started', { signal });
+
+        server.close(() => {
+            void shutdownPool()
+                .catch((err) => logError('pool_shutdown_failed', err))
+                .finally(() => {
+                    logInfo('shutdown_complete');
+                    process.exit(0);
+                });
+        });
+
+        // Never hang forever waiting on a stuck connection.
+        setTimeout(() => {
+            logError('shutdown_forced', new Error('Graceful shutdown timed out'));
+            process.exit(1);
+        }, 30_000).unref();
+    });
+}
+
+process.on('unhandledRejection', (reason) => logError('unhandled_rejection', reason));
+process.on('uncaughtException', (err) => {
+    logError('uncaught_exception', err);
+    logger.flush?.();
+    process.exit(1);
+});
+
+export { app, server };

@@ -1,600 +1,821 @@
-import { logDebug, logSkipped } from '../utils/logger';
+import { logInfo, logWarn, logError, logDebug, logSkipped } from '../utils/logger';
+import { config } from '../config';
+import { runPython } from '../utils/python_runner';
 import { emailService } from './EmailService';
 import { screeningAgent } from './ScreeningAgent';
 import { retrievalPipelineService } from './RetrievalPipelineService';
 import { googleSheetsService } from './GoogleSheetsService';
+import { ScoringResponse, type CandidateInput, type RiskScoreEntry } from '../core/schemas';
+import {
+    getSentCandidatesBatch,
+    logOutreachSent,
+    saveScreeningResult,
+    getScreenedCandidatesBatch,
+    getCompanyIntelBatch,
+} from '../repositories/postgres_repo';
+import { recordBatchProgress } from '../controllers/OutreachController';
 import { createObjectCsvWriter } from 'csv-writer';
-import { getSentCandidatesBatch, logOutreachSent, saveScreeningResult, getScreenedCandidatesBatch, getCompanyIntelBatch } from '../repositories/postgres_repo';
-import { activeBatchDetails } from '../controllers/OutreachController';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
-import { exec } from 'child_process';
-import util from 'util';
-
-const execPromise = util.promisify(exec);
 
 const OUTPUT_CSV = path.join(process.cwd(), 'generated_outreach_emails.csv');
-const OUTPUT_LOG = path.join(process.cwd(), 'generated_outreach_emails.txt');
 
-// Recipients excluded from outreach-history logging. Sourced from the
-// environment so no personal address is hard-coded into the repository.
-// Set OUTREACH_BLOCKED_RECIPIENTS in .env as a comma-separated list.
-const BLOCKED_RECIPIENTS = new Set(
-    (process.env.OUTREACH_BLOCKED_RECIPIENTS ?? '')
-        .split(',')
-        .map(e => e.trim().toLowerCase())
-        .filter(Boolean)
+/**
+ * Recipients excluded from outreach-history logging. Sourced from the
+ * environment so no personal address is hard-coded into the repository.
+ */
+const BLOCKED_RECIPIENTS = new Set(config.OUTREACH_BLOCKED_RECIPIENTS.map((e) => e.toLowerCase()));
+
+const PY_INFERENCE = path.resolve(__dirname, '../../../machine_learning/src/inference.py');
+const PY_TREE_SCORER = path.resolve(
+    __dirname,
+    '../../../machine_learning/tree_scorer/jd_tree_scorer.py',
 );
 
+type RiskMap = Record<string, RiskScoreEntry>;
+
+export interface OutreachCampaignOptions {
+    jdText: string;
+    uiCandidates: CandidateInput[];
+    companyName: string;
+    jobName: string;
+    /** Comma-separated recipient list, already validated by the request schema. */
+    recipients: string;
+    targetModel?: string;
+    adjacentRoles?: string;
+    bypassDeduplication?: boolean;
+    batchId?: number;
+    cc?: string;
+    usePipeline?: boolean;
+    topN?: number;
+    topK?: number;
+    minExp?: number;
+    maxExp?: number;
+    screeningEngine?: 'llm' | 'tree' | 'tree_llm';
+    treeTopK?: number;
+    useCompanyIntel?: boolean;
+}
+
+interface NormalisedCandidate extends Record<string, unknown> {
+    name: string;
+    profile_url: string;
+    current_company: string;
+    location: string;
+    summary: string;
+    experience: string;
+    education: string;
+    headline: string;
+    skills: string;
+    _treeScore?: number;
+    _langScore?: number;
+    _companyIntel?: string;
+}
+
+/** Company-name suffixes stripped before comparing employers. */
+const GENERIC_SUFFIXES =
+    /\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?|group|holdings|japan|international|global)\b/gi;
+
 export class OutreachService {
-    
-    private async savePassedCandidateLogs(candidate: any, profileUrl: string) {
-        const csvWriter = createObjectCsvWriter({
-            path: OUTPUT_CSV,
-            header: [
-                { id: 'name', title: 'Candidate_Name' },
-                { id: 'email', title: 'Candidate_Email' },
-                { id: 'url', title: 'Profile_URL' }
-            ],
-            append: fs.existsSync(OUTPUT_CSV)
-        });
+    /**
+     * Appends passed candidates to the CSV in one write.
+     *
+     * B16: this previously constructed a fresh csvWriter per candidate and used
+     * `append: fs.existsSync(...)` to decide whether to emit a header. Called
+     * concurrently from a screening wave, that races — several writers can all
+     * observe "file absent" and each emit a header row. Batching the write
+     * removes both the race and the per-candidate blocking append.
+     */
+    private async savePassedCandidateLogs(
+        candidates: ReadonlyArray<{ name?: string; email?: string; profile_url?: string }>,
+    ): Promise<void> {
+        if (candidates.length === 0) return;
 
-        const name = candidate.name || 'Unknown';
-
-        await csvWriter.writeRecords([{
-            name: name,
-            email: candidate.email || 'No Email Found',
-            url: profileUrl
-        }]);
-
-        const logEntry = `--- PASSED CANDIDATE: ${name} ---\n` +
-            `Email: ${candidate.email || 'No Email Found'}\n` +
-            `URL: ${profileUrl}\n` +
-            `${"=".repeat(60)}\n\n`;
-        fs.appendFileSync(OUTPUT_LOG, logEntry);
+        try {
+            const csvWriter = createObjectCsvWriter({
+                path: OUTPUT_CSV,
+                header: [
+                    { id: 'name', title: 'Candidate_Name' },
+                    { id: 'email', title: 'Candidate_Email' },
+                    { id: 'url', title: 'Profile_URL' },
+                ],
+                append: fs.existsSync(OUTPUT_CSV),
+            });
+            await csvWriter.writeRecords(
+                candidates.map((c) => ({
+                    name: c.name ?? 'Unknown',
+                    email: c.email ?? 'No Email Found',
+                    url: c.profile_url ?? 'N/A',
+                })),
+            );
+        } catch (err) {
+            logError('csv_write_failed', err, { count: candidates.length });
+        }
     }
 
-    public async runOutreachCampaign(
-        jdText: string,
-        uiCandidates: any[],
-        companyName: string,
-        testTo: string,
-        targetModel: string = "deepseek-ai/DeepSeek-V3.2",
-        adjacentRoles: string = "",
-        jobName: string = "",
-        bypassDeduplication: boolean = false,
-        batchId?: number,
-        testCc?: string,
-        usePipeline: boolean = false,
-        topN: number = 700,
-        topK: number = 300,
-        minExp?: number,
-        maxExp?: number,
-        screeningEngine: string = "llm",
-        treeTopK: number = 1000,
-        useCompanyIntel: boolean = true
-    ) {
-        // If not using pipeline or tree engine, we MUST have boolean candidates. If using pipeline or tree, we don't need them.
-        if (!usePipeline && screeningEngine !== 'tree' && (!uiCandidates || uiCandidates.length === 0)) return;
+    /** Calls the ML scoring service; falls back to the local script if unreachable. */
+    private async scoreCandidates(profileUrls: string[], jdText: string): Promise<RiskMap> {
+        if (profileUrls.length === 0) return {};
 
-        const emailsList = testTo.split(',')
-            .map(e => e.trim())
-            .filter(e => e !== '' && !BLOCKED_RECIPIENTS.has(e.toLowerCase()));
-
-        // ── Advanced Pipeline Path ───────────────────────────────────────────
-        if (usePipeline) {
-            const healthy = await retrievalPipelineService.isHealthy();
-            if (!healthy) {
-                await logDebug('[Pipeline] ⚠️  Retrieval microservice is not running — falling back to standard screening path.');
-                await logDebug('[Pipeline]    Start it with: npm run retrieval-service');
-            } else {
-                await logDebug(`[Pipeline] 🚀 Advanced pipeline active (top_n=${topN}, top_k=${topK})`);
-
-                const pipelineResult = await retrievalPipelineService.search(
-                    jdText, topN, topK, companyName, targetModel, minExp, maxExp
-                );
-
-                if (!pipelineResult || pipelineResult.candidates.length === 0) {
-                    await logDebug('[Pipeline] No candidates returned from pipeline — falling back to standard path.');
-                } else {
-                    const passedCandidateUrls = pipelineResult.candidates.map(c => c.profile_url);
-
-                    // Log passed candidates (same format as standard path)
-                    for (const c of pipelineResult.candidates) {
-                        await logDebug(`  [Pipeline] ✅ PASS: ${c.name} (fit=${c.audit_fit_score}/5, rerank=${c.reranker_score?.toFixed(3)})`);
-                        await this.savePassedCandidateLogs(c, c.profile_url);
-                    }
-
-                    // Update batch progress counter
-                    if (batchId) {
-                        const detail = activeBatchDetails.get(batchId);
-                        if (detail) {
-                            detail.processed = pipelineResult.meta.total_retrieved;
-                            activeBatchDetails.set(batchId, detail);
-                        }
-                    }
-
-                    // ── ML Scoring API Integration ─────────
-                    let riskData: Record<string, { hazard: number, relevancy: number, move_prob: number, tenure: number, median_tenure?: number }> = {};
-                    try {
-                        await logDebug(`\nScoring ${passedCandidateUrls.length} candidates for LTR Match and Flight Risk...`);
-                        
-                        // Hit the new FastAPI serve_models.py endpoint
-                        const response = await fetch('http://localhost:8000/score', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                profile_urls: passedCandidateUrls,
-                                jd_text: jdText
-                            })
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`API returned ${response.status} ${response.statusText}`);
-                        }
-                        
-                        const data = await response.json();
-                        riskData = data.scored_candidates || {};
-                        
-                        await logDebug(`  [Scoring Success] Retrieved scores for ${Object.keys(riskData).length} candidates.`);
-                    } catch (error: any) {
-                        await logDebug(`  [Scoring Error] Failed to get ML scores: ${error.message}`);
-                    }
-                    const filteredUrls = passedCandidateUrls.filter(url => {
-                        const d = riskData[url];
-                        return d ? d.move_prob >= 0.02 : true;
-                    });
-
-                    const sortedUrls = [...filteredUrls].sort((a, b) => {
-                        const dataA = riskData[a] || { hazard: 0, relevancy: 0, move_prob: 0, tenure: 0 };
-                        const dataB = riskData[b] || { hazard: 0, relevancy: 0, move_prob: 0, tenure: 0 };
-                        // 1. Sort by LTR Match (Relevancy) descending
-                        if (dataB.relevancy !== dataA.relevancy) return dataB.relevancy - dataA.relevancy;
-                        // 2. Sort by Flight Risk (Hazard) descending
-                        if (dataB.hazard !== dataA.hazard) return dataB.hazard - dataA.hazard;
-                        return dataB.tenure - dataA.tenure;
-                    });
-
-                    // ── Google Sheets + Email Notification ─────────────
-                    const sheetCandidates = sortedUrls.map(url => {
-                        const c = pipelineResult.candidates.find(x => x.profile_url === url);
-                        return {
-                            name: c?.name || 'Unknown',
-                            profile_url: url,
-                            headline: c?.headline || '',
-                            current_company: c?.current_company || '',
-                            location: c?.location || ''
-                        };
-                    });
-
-                    let sheetUrl = '';
-                    let newCount = sheetCandidates.length;
-                    try {
-                        const spreadsheetId = await googleSheetsService.findOrCreateSpreadsheet(jobName, companyName);
-                        newCount = await googleSheetsService.appendCandidates(spreadsheetId, sheetCandidates, riskData, testTo);
-                        sheetUrl = googleSheetsService.getSpreadsheetUrl(spreadsheetId);
-                    } catch (err: any) {
-                        await logDebug(`  [GSheets] Failed: ${err.message}. Falling back to email-only.`);
-                    }
-
-                    const meta = pipelineResult.meta;
-                    const subject = `[🚀 Pipeline] ${newCount} new candidates added for ${jobName} at ${companyName}`;
-                    const body = sheetUrl
-                        ? [
-                            `${newCount} new candidates have been added to the spreadsheet.`,
-                            ``,
-                            `📊 View spreadsheet: ${sheetUrl}`,
-                            ``,
-                            `Pipeline stats: Retrieved ${meta.total_retrieved} → Reranked to ${meta.after_rerank} → ${meta.passed_audit} passed audit (${meta.duration_seconds}s)`,
-                            `Screening model: ${targetModel}`,
-                        ].join('\n')
-                        : [
-                            `Pipeline stats: Retrieved ${meta.total_retrieved} → Reranked to ${meta.after_rerank} → ${meta.passed_audit} passed audit (${meta.duration_seconds}s)`,
-                            ``,
-                            `LinkedIn URLs of candidates that passed all screening steps:`,
-                            ``,
-                            sortedUrls.map(url => {
-                                const d = riskData[url] as any;
-                                const c = pipelineResult.candidates.find(x => x.profile_url === url);
-                                const name = c?.name || '';
-                                const fit = c?.audit_fit_score ? `Fit:${c.audit_fit_score}/5` : '';
-                                if (!d) return `${name} | ${url} (Risk: N/A${fit ? ' | ' + fit : ''})`;
-                                const badge = d.move_prob >= 0.15 ? '[RESTLESS]' : '[STABLE]';
-                                return `${badge.padEnd(22)} | Hazard: ${d.hazard.toFixed(2)} | Move Prob: ${(d.move_prob * 100).toFixed(2)}% | ${fit} | URL: ${url}`;
-                            }).join('\n'),
-                            ``,
-                            `---`,
-                            `Screening model: ${targetModel}`,
-                        ].join('\n');
-
-                    const emailSent = await emailService.sendEmail(subject, body, testTo, testCc);
-                    if (emailSent) {
-                        for (const url of passedCandidateUrls) {
-                            if (url !== 'N/A' && emailsList.length > 0) {
-                                await logOutreachSent(url, emailsList, companyName, jobName);
-                            }
-                        }
-                        await logDebug(`  [DB] Marked ${passedCandidateUrls.length} candidates as sent.`);
-                    } else {
-                        await logDebug(`  ⚠️ Email failed to send — candidates NOT marked as sent.`);
-                    }
-
-                    logDebug(`\n[Pipeline] Campaign Complete! ${passedCandidateUrls.length} candidates passed.`);
-                    return; // ← exit here, skip standard path
-                }
-            }
-        }
-        // ── End Pipeline Path — standard path continues below ────────────────
-
-        // --- Deterministic Same-Company Filter ---
-        const GENERIC_SUFFIXES = /\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?|group|holdings|japan|international|global)\b/gi;
-        const hiringCompany = companyName?.trim().toLowerCase() || '';
-        const hiringCompanyCanonical = hiringCompany.replace(GENERIC_SUFFIXES, '').replace(/\s+/g, ' ').trim();
-        let candidates = uiCandidates.map(c => ({
-            name: c.name || c.full_name || 'Unknown',
-            profile_url: c.profile_url || c.resume_drive_view_url || 'N/A',
-            current_company: c.current_company || c.ai_latest_company || 'N/A',
-            location: c.location || c.ai_latest_location || 'N/A',
-            summary: c.summary || c.candidate_summary || 'N/A',
-            experience: c.experience || c.resume_text_excerpt || 'N/A',
-            education: c.education || 'N/A',
-            headline: c.headline || c.ai_latest_role || 'N/A',
-            skills: c.skills || 'N/A',
-            ...c // preserve original fields
-        }));
-        
-        if (hiringCompanyCanonical.length >= 3) {
-            const companyTokens = [hiringCompanyCanonical, ...hiringCompanyCanonical.split(/\s+/).filter(t => {
-                const clean = t.replace(/[^\w\s]/g, '').trim();
-                return clean.length >= 4;
-            })];
-            const beforeCount = candidates.length;
-            candidates = candidates.filter(c => {
-                const ccRaw = (c.current_company || '').trim().toLowerCase();
-                if (!ccRaw || ccRaw === 'n/a') return true; 
-                const cc = ccRaw.replace(GENERIC_SUFFIXES, '').replace(/\s+/g, ' ').trim();
-                if (cc.length < 3) return true; 
-                const isMatch = companyTokens.some(token => cc.includes(token) || token.includes(cc));
-                if (isMatch) {
-                    logDebug(`  [Same-Company Filter] EXCLUDED ${c.name}`);
-                    logSkipped(c, "Same-Company Filter", `Candidate currently works at "${c.current_company}" which matches hiring company "${companyName}"`);
-                }
-                return !isMatch;
+        // Preferred path: the long-running FastAPI service, which keeps the
+        // LightGBM/PyTorch models resident instead of reloading them per batch.
+        try {
+            const resp = await fetch(`${config.ML_SCORING_URL}/score`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ profile_urls: profileUrls, jd_text: jdText }),
+                signal: AbortSignal.timeout(config.RETRIEVAL_TIMEOUT_MS),
             });
-            logDebug(`\n--- Same-Company Filter: Removed ${beforeCount - candidates.length} candidates (${candidates.length} remaining) ---`);
+            if (!resp.ok) throw new Error(`Scoring service returned ${resp.status}`);
+            const parsed = ScoringResponse.safeParse(await resp.json());
+            if (!parsed.success) throw new Error('Malformed scoring response');
+            logInfo('scoring_via_service', {
+                count: Object.keys(parsed.data.scored_candidates).length,
+            });
+            return parsed.data.scored_candidates;
+        } catch (err) {
+            logWarn('scoring_service_unavailable', { message: (err as Error).message });
         }
 
-        if (candidates.length === 0 && screeningEngine !== 'tree' && screeningEngine !== 'tree_llm') return;
+        // Fallback: run inference.py directly. B1 — no shell involved.
+        try {
+            const raw = await runPython<RiskMap>({
+                scriptPath: PY_INFERENCE,
+                stdinPayload: profileUrls,
+            });
+            logInfo('scoring_via_subprocess', { count: Object.keys(raw).length });
+            return raw;
+        } catch (err) {
+            logError('scoring_failed', err, { count: profileUrls.length });
+            return {};
+        }
+    }
 
-        // Pre-load sheet spreadsheet id and existing URLs for incremental inserts
+    private normaliseCandidates(input: CandidateInput[]): NormalisedCandidate[] {
+        return input.map((c) => ({
+            ...c,
+            name: c.name ?? c.full_name ?? 'Unknown',
+            profile_url: c.profile_url ?? c.resume_drive_view_url ?? 'N/A',
+            current_company: c.current_company ?? c.ai_latest_company ?? 'N/A',
+            location: c.location ?? c.ai_latest_location ?? 'N/A',
+            summary: c.summary ?? c.candidate_summary ?? 'N/A',
+            experience: c.experience ?? c.resume_text_excerpt ?? 'N/A',
+            education: c.education ?? 'N/A',
+            headline: c.headline ?? c.ai_latest_role ?? 'N/A',
+            skills: c.skills ?? 'N/A',
+        }));
+    }
+
+    /** Removes candidates already employed by the hiring company. */
+    private excludeSameCompany(
+        candidates: NormalisedCandidate[],
+        companyName: string,
+    ): NormalisedCandidate[] {
+        const canonical = companyName
+            .trim()
+            .toLowerCase()
+            .replace(GENERIC_SUFFIXES, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (canonical.length < 3) return candidates;
+
+        const tokens = [
+            canonical,
+            ...canonical.split(/\s+/).filter((t) => t.replace(/[^\w\s]/g, '').trim().length >= 4),
+        ];
+
+        const before = candidates.length;
+        const kept = candidates.filter((c) => {
+            const raw = (c.current_company || '').trim().toLowerCase();
+            if (!raw || raw === 'n/a') return true;
+            const cc = raw.replace(GENERIC_SUFFIXES, '').replace(/\s+/g, ' ').trim();
+            if (cc.length < 3) return true;
+            const isMatch = tokens.some((t) => cc.includes(t) || t.includes(cc));
+            if (isMatch) {
+                void logSkipped(c, 'Same-Company Filter', `Currently at "${c.current_company}"`);
+            }
+            return !isMatch;
+        });
+
+        logInfo('same_company_filter', { removed: before - kept.length, remaining: kept.length });
+        return kept;
+    }
+
+    /** Ranks by relevancy, then hazard, then tenure — all descending. */
+    private rank(urls: string[], risk: RiskMap): string[] {
+        const zero: RiskScoreEntry = { hazard: 0, relevancy: 0, move_prob: 0, tenure: 0 };
+        return [...urls]
+            .filter((u) => {
+                const d = risk[u];
+                return d ? d.move_prob >= 0.02 : true;
+            })
+            .sort((a, b) => {
+                const x = risk[a] ?? zero;
+                const y = risk[b] ?? zero;
+                if (y.relevancy !== x.relevancy) return y.relevancy - x.relevancy;
+                if (y.move_prob !== x.move_prob) return y.move_prob - x.move_prob;
+                if (y.hazard !== x.hazard) return y.hazard - x.hazard;
+                return y.tenure - x.tenure;
+            });
+    }
+
+    private formatCandidateLine(url: string, risk: RiskMap, extra = ''): string {
+        const d = risk[url];
+        if (!d) return `${url} (Risk: N/A${extra})`;
+        const badge = d.move_prob >= 0.15 ? '[RESTLESS]' : '[STABLE]';
+        return (
+            `${badge.padEnd(12)} | Hazard: ${d.hazard.toFixed(2)} | ` +
+            `Move Prob: ${(d.move_prob * 100).toFixed(2)}% | ` +
+            `Tenure: ${d.tenure.toFixed(1)}mo${extra} | URL: ${url}`
+        );
+    }
+
+    public async runOutreachCampaign(opts: OutreachCampaignOptions): Promise<void> {
+        const {
+            jdText,
+            uiCandidates,
+            companyName,
+            jobName,
+            recipients,
+            targetModel = 'deepseek-ai/DeepSeek-V3.2',
+            adjacentRoles = '',
+            bypassDeduplication = false,
+            batchId,
+            cc,
+            usePipeline = false,
+            topN = 700,
+            topK = 300,
+            minExp,
+            maxExp,
+            screeningEngine = 'llm',
+            treeTopK = 1000,
+            useCompanyIntel = true,
+        } = opts;
+
+        const emailsList = recipients
+            .split(',')
+            .map((e) => e.trim())
+            .filter((e) => e !== '' && !BLOCKED_RECIPIENTS.has(e.toLowerCase()));
+
+        if (!usePipeline && screeningEngine === 'llm' && uiCandidates.length === 0) return;
+
+        // ── Advanced pipeline path ──────────────────────────────────────────
+        if (usePipeline) {
+            const handled = await this.runPipelinePath({
+                jdText,
+                companyName,
+                jobName,
+                recipients,
+                cc,
+                targetModel,
+                topN,
+                topK,
+                minExp,
+                maxExp,
+                batchId,
+                emailsList,
+            });
+            if (handled) return;
+        }
+
+        // ── Standard path ───────────────────────────────────────────────────
+        let candidates = this.excludeSameCompany(
+            this.normaliseCandidates(uiCandidates),
+            companyName,
+        );
+
+        if (candidates.length === 0 && screeningEngine === 'llm') return;
+
         let spreadsheetId = '';
         let existingSheetUrls = new Set<string>();
         try {
             spreadsheetId = await googleSheetsService.findOrCreateSpreadsheet(jobName, companyName);
             existingSheetUrls = await googleSheetsService.loadExistingUrls(spreadsheetId);
-        } catch (err: any) {
-            await logDebug(`  [GSheets] Failed to initialize spreadsheet: ${err.message}`);
+        } catch (err) {
+            logError('gsheets_init_failed', err);
         }
 
         const passedCandidateUrls: string[] = [];
+        const passedForCsv: NormalisedCandidate[] = [];
         let candidatesToAudit = candidates;
 
-        // Fetch already screened candidates to skip them
-        const allProfileUrls = candidatesToAudit.map(c => c.profile_url || 'N/A').filter(url => url !== 'N/A');
+        const allProfileUrls = candidates.map((c) => c.profile_url).filter((u) => u !== 'N/A');
         const screenedSet = await getScreenedCandidatesBatch(allProfileUrls, companyName, jobName);
 
         if (useCompanyIntel) {
-            // Batch-load company intel for all candidate employers (single DB query)
-            const candidateCompanyNames = candidatesToAudit
-                .map(c => c.current_company)
+            const names = candidates
+                .map((c) => c.current_company)
                 .filter((n): n is string => !!n && n.trim().length > 0);
-            const companyIntelMap = await getCompanyIntelBatch(candidateCompanyNames);
-            await logDebug(`  [CompanyIntel] Loaded intel for ${companyIntelMap.size} / ${new Set(candidateCompanyNames.map(n => n.toLowerCase())).size} unique companies.`);
-
-            // Attach company intel to each candidate object
-            for (const c of candidatesToAudit) {
-                if (c.current_company) {
-                    const intel = companyIntelMap.get(c.current_company.trim().toLowerCase());
-                    if (intel) {
-                        (c as any)._companyIntel = `[Company Intel] ${intel.company_type} | Size: ${intel.size_band} | Flight Risk: ${intel.flight_risk} | Compensation: ${intel.compensation}`;
-                    }
+            const intel = await getCompanyIntelBatch(names);
+            logInfo('company_intel_loaded', { matched: intel.size });
+            for (const c of candidates) {
+                const hit = intel.get((c.current_company ?? '').trim().toLowerCase());
+                if (hit) {
+                    c._companyIntel =
+                        `[Company Intel] ${hit.company_type} | Size: ${hit.size_band} | ` +
+                        `Flight Risk: ${hit.flight_risk} | Compensation: ${hit.compensation}`;
                 }
             }
         }
 
+        // ── Tree scorer ─────────────────────────────────────────────────────
         if (screeningEngine === 'tree' || screeningEngine === 'tree_llm') {
-            await logDebug(`\n[Tree Scorer] Running ML tree-based candidate scorer for ${candidates.length || 'ALL database'} candidates...`);
-            const tmpFile = path.join(process.cwd(), `tree_payload_${Date.now()}.json`);
-            fs.writeFileSync(tmpFile, JSON.stringify({ jd: jdText, companyName, candidates, topK: treeTopK }));
-            
-            try {
-                const pythonScript = path.resolve(__dirname, '../../../machine_learning/tree_scorer/jd_tree_scorer.py');
-                const pythonDir = path.dirname(pythonScript);
-                const { stdout, stderr } = await execPromise(`cat "${tmpFile}" | PYTHONPATH="${pythonDir}" python3 "${pythonScript}" --json`, { maxBuffer: 1024 * 1024 * 50 });
-                if (stderr) await logDebug(`  [Tree Warning] ${stderr}`);
-                const parsed = JSON.parse(stdout);
-                
-                if (parsed.error) {
-                    await logDebug(`  [Tree Error] ${parsed.error}`);
-                } else {
-                    const results = parsed.candidates || [];
-                    
-                    // Reconstruct candidates array if empty (Pure ML Match path)
-                    if (candidates.length === 0) {
-                        candidates = results.map((r: any) => ({
-                            name: r.name,
-                            profile_url: r.profile_url,
-                            current_company: r.current_company,
-                            _treeScore: r.tree_score,
-                            _langScore: r.lang_infer_score
-                        }));
-                    }
-                    
-                    const passedTreeCandidates = [];
-                    for (const r of results) {
-                        const candObj = candidates.find(c => c.profile_url === r.profile_url);
-                        
-                        // Skip if already screened and not doing LLM
-                        if (screeningEngine === 'tree' && screenedSet.has(r.profile_url)) {
-                            const prevVerdict = screenedSet.get(r.profile_url);
-                            if (prevVerdict === 'PASS') passedCandidateUrls.push(r.profile_url);
-                            continue;
-                        }
+            const result = await this.runTreeScorer({
+                jdText,
+                companyName,
+                jobName,
+                candidates,
+                treeTopK,
+                screenedSet,
+                screeningEngine,
+                spreadsheetId,
+                existingSheetUrls,
+                recipients,
+                passedCandidateUrls,
+                passedForCsv,
+                batchId,
+            });
+            candidates = result.candidates;
+            if (screeningEngine === 'tree_llm') candidatesToAudit = result.passedTree;
+            else candidatesToAudit = [];
+        }
 
-                        if (r.tree_score >= 0.5) { // 0.5 Threshold
-                            await logDebug(`  ✅ PASS: ${r.name} (Tree: ${r.tree_score.toFixed(3)}, Lang: ${r.lang_infer_score}/3)`);
-                            
-                            // Save tree verdict
-                            await saveScreeningResult(r.profile_url, companyName, jobName, 'PASS', `Tree Score: ${r.tree_score.toFixed(3)}`);
-                            
-                            if (screeningEngine === 'tree') {
-                                passedCandidateUrls.push(r.profile_url);
-                                if (candObj) {
-                                    await this.savePassedCandidateLogs(candObj, r.profile_url);
-                                    if (spreadsheetId) {
-                                        await googleSheetsService.appendSingleCandidate(spreadsheetId, candObj, existingSheetUrls, testTo);
-                                    }
-                                }
-                            }
-                            if (candObj) {
-                                (candObj as any)._treeScore = r.tree_score;
-                                (candObj as any)._langScore = r.lang_infer_score;
-                                passedTreeCandidates.push(candObj);
-                            }
-                        } else {
-                            await logDebug(`  ❌ FAIL: ${r.name} (Tree: ${r.tree_score.toFixed(3)})`);
-                            await saveScreeningResult(r.profile_url, companyName, jobName, 'REJECT', `Tree Score: ${r.tree_score.toFixed(3)}`);
-                        }
+        // ── LLM audit ───────────────────────────────────────────────────────
+        if (
+            (screeningEngine === 'llm' || screeningEngine === 'tree_llm') &&
+            candidatesToAudit.length > 0
+        ) {
+            await this.runLlmAudit({
+                jdText,
+                companyName,
+                jobName,
+                targetModel,
+                adjacentRoles,
+                candidatesToAudit,
+                screenedSet,
+                bypassDeduplication,
+                emailsList,
+                spreadsheetId,
+                existingSheetUrls,
+                recipients,
+                batchId,
+                passedCandidateUrls,
+                passedForCsv,
+            });
+        }
+
+        await this.savePassedCandidateLogs(passedForCsv);
+
+        if (passedCandidateUrls.length === 0) {
+            logInfo('campaign_complete', { batchId, passed: 0, processed: candidates.length });
+            return;
+        }
+
+        // ── Scoring, notification, history ──────────────────────────────────
+        const riskData = await this.scoreCandidates(passedCandidateUrls, jdText);
+        const rankedUrls = this.rank(passedCandidateUrls, riskData);
+
+        if (spreadsheetId && Object.keys(riskData).length > 0) {
+            await googleSheetsService.backfillRiskScores(spreadsheetId, riskData);
+        }
+
+        const sheetUrl = spreadsheetId ? googleSheetsService.getSpreadsheetUrl(spreadsheetId) : '';
+        const subject = `${rankedUrls.length} new candidates added for ${jobName} at ${companyName}`;
+        const body = sheetUrl
+            ? [
+                  `${rankedUrls.length} new candidates have been added to the spreadsheet.`,
+                  ``,
+                  `📊 View spreadsheet: ${sheetUrl}`,
+                  ``,
+                  `---`,
+                  `Screening model: ${targetModel}`,
+              ].join('\n')
+            : [
+                  `Candidates that passed all verification steps:`,
+                  ``,
+                  rankedUrls
+                      .map((url) => {
+                          const c = candidates.find((x) => x.profile_url === url);
+                          const extra =
+                              c?._treeScore !== undefined
+                                  ? ` | Tree: ${c._treeScore.toFixed(2)} | Lang: ${c._langScore}/3`
+                                  : '';
+                          return this.formatCandidateLine(url, riskData, extra);
+                      })
+                      .join('\n'),
+                  ``,
+                  `---`,
+                  `Screening model: ${targetModel}`,
+              ].join('\n');
+
+        const emailSent = await emailService.sendEmail(subject, body, recipients, cc);
+
+        if (emailSent) {
+            // B12: mark exactly the candidates that were actually surfaced.
+            // The previous code iterated the *unfiltered* list, so candidates
+            // dropped for low move_prob were recorded as contacted and were
+            // permanently suppressed by the dedup check without ever appearing
+            // in an email.
+            if (emailsList.length > 0) {
+                const marked = await logOutreachSent(rankedUrls, emailsList, companyName, jobName);
+                logInfo('outreach_history_written', { batchId, marked });
+            }
+        } else {
+            logWarn('email_failed_history_skipped', { batchId, candidates: rankedUrls.length });
+        }
+
+        logInfo('campaign_complete', {
+            batchId,
+            passed: passedCandidateUrls.length,
+            surfaced: rankedUrls.length,
+            emailSent,
+        });
+    }
+
+    // ── Pipeline path ────────────────────────────────────────────────────────
+    private async runPipelinePath(a: {
+        jdText: string;
+        companyName: string;
+        jobName: string;
+        recipients: string;
+        cc?: string;
+        targetModel: string;
+        topN: number;
+        topK: number;
+        minExp?: number;
+        maxExp?: number;
+        batchId?: number;
+        emailsList: string[];
+    }): Promise<boolean> {
+        if (!(await retrievalPipelineService.isHealthy())) {
+            logWarn('pipeline_unhealthy_falling_back');
+            return false;
+        }
+
+        const result = await retrievalPipelineService.search(
+            a.jdText,
+            a.topN,
+            a.topK,
+            a.companyName,
+            a.targetModel,
+            a.minExp,
+            a.maxExp,
+        );
+        if (!result || result.candidates.length === 0) {
+            logWarn('pipeline_returned_nothing_falling_back');
+            return false;
+        }
+
+        const urls = result.candidates.map((c) => c.profile_url);
+        recordBatchProgress(a.batchId, result.meta.total_retrieved);
+        await this.savePassedCandidateLogs(result.candidates);
+
+        const riskData = await this.scoreCandidates(urls, a.jdText);
+        const rankedUrls = this.rank(urls, riskData);
+
+        const sheetCandidates = rankedUrls.map((url) => {
+            const c = result.candidates.find((x) => x.profile_url === url);
+            return {
+                name: c?.name ?? 'Unknown',
+                profile_url: url,
+                headline: c?.headline ?? '',
+                current_company: c?.current_company ?? '',
+                location: c?.location ?? '',
+            };
+        });
+
+        let sheetUrl = '';
+        let newCount = sheetCandidates.length;
+        try {
+            const id = await googleSheetsService.findOrCreateSpreadsheet(a.jobName, a.companyName);
+            newCount = await googleSheetsService.appendCandidates(
+                id,
+                sheetCandidates,
+                riskData,
+                a.recipients,
+            );
+            sheetUrl = googleSheetsService.getSpreadsheetUrl(id);
+        } catch (err) {
+            logError('gsheets_pipeline_failed', err);
+        }
+
+        const m = result.meta;
+        const stats =
+            `Pipeline stats: Retrieved ${m.total_retrieved} → Reranked to ${m.after_rerank} → ` +
+            `${m.passed_audit} passed audit (${m.duration_seconds}s)`;
+        const subject = `[🚀 Pipeline] ${newCount} new candidates for ${a.jobName} at ${a.companyName}`;
+        const body = sheetUrl
+            ? [
+                  `${newCount} new candidates added.`,
+                  ``,
+                  `📊 ${sheetUrl}`,
+                  ``,
+                  stats,
+                  `Screening model: ${a.targetModel}`,
+              ].join('\n')
+            : [
+                  stats,
+                  ``,
+                  `Candidates that passed screening:`,
+                  ``,
+                  rankedUrls
+                      .map((u) => {
+                          const c = result.candidates.find((x) => x.profile_url === u);
+                          const fit = c?.audit_fit_score ? ` | Fit: ${c.audit_fit_score}/5` : '';
+                          return this.formatCandidateLine(u, riskData, fit);
+                      })
+                      .join('\n'),
+                  ``,
+                  `---`,
+                  `Screening model: ${a.targetModel}`,
+              ].join('\n');
+
+        const sent = await emailService.sendEmail(subject, body, a.recipients, a.cc);
+        if (sent && a.emailsList.length > 0) {
+            const marked = await logOutreachSent(
+                rankedUrls,
+                a.emailsList,
+                a.companyName,
+                a.jobName,
+            );
+            logInfo('outreach_history_written', { batchId: a.batchId, marked });
+        } else if (!sent) {
+            logWarn('email_failed_history_skipped', { batchId: a.batchId });
+        }
+
+        logInfo('pipeline_campaign_complete', { batchId: a.batchId, passed: urls.length });
+        return true;
+    }
+
+    // ── Tree scorer path ─────────────────────────────────────────────────────
+    private async runTreeScorer(a: {
+        jdText: string;
+        companyName: string;
+        jobName: string;
+        candidates: NormalisedCandidate[];
+        treeTopK: number;
+        screenedSet: Map<string, 'PASS' | 'REJECT'>;
+        screeningEngine: string;
+        spreadsheetId: string;
+        existingSheetUrls: Set<string>;
+        recipients: string;
+        passedCandidateUrls: string[];
+        passedForCsv: NormalisedCandidate[];
+        batchId?: number;
+    }): Promise<{ candidates: NormalisedCandidate[]; passedTree: NormalisedCandidate[] }> {
+        let candidates = a.candidates;
+        const passedTree: NormalisedCandidate[] = [];
+
+        logInfo('tree_scorer_started', { count: candidates.length || 'ALL' });
+
+        try {
+            // B1: argv array + stdin, no shell, no temp file on disk.
+            const parsed = await runPython<{
+                error?: string;
+                candidates?: Array<{
+                    profile_url: string;
+                    name: string;
+                    current_company?: string;
+                    tree_score: number;
+                    lang_infer_score: number;
+                }>;
+            }>({
+                scriptPath: PY_TREE_SCORER,
+                args: ['--json'],
+                stdinPayload: {
+                    jd: a.jdText,
+                    companyName: a.companyName,
+                    candidates,
+                    topK: a.treeTopK,
+                },
+            });
+
+            if (parsed.error) {
+                logError('tree_scorer_error', new Error(parsed.error));
+                return { candidates, passedTree };
+            }
+
+            const results = parsed.candidates ?? [];
+
+            // Pure-ML path: the scorer sourced candidates itself.
+            if (candidates.length === 0) {
+                candidates = results.map((r) => ({
+                    ...r,
+                    name: r.name,
+                    profile_url: r.profile_url,
+                    current_company: r.current_company ?? 'N/A',
+                    location: 'N/A',
+                    summary: 'N/A',
+                    experience: 'N/A',
+                    education: 'N/A',
+                    headline: 'N/A',
+                    skills: 'N/A',
+                    _treeScore: r.tree_score,
+                    _langScore: r.lang_infer_score,
+                }));
+            }
+
+            for (const r of results) {
+                const candObj = candidates.find((c) => c.profile_url === r.profile_url);
+
+                if (a.screeningEngine === 'tree' && a.screenedSet.has(r.profile_url)) {
+                    if (a.screenedSet.get(r.profile_url) === 'PASS') {
+                        a.passedCandidateUrls.push(r.profile_url);
                     }
-                    if (screeningEngine === 'tree_llm') {
-                        candidatesToAudit = passedTreeCandidates;
-                        await logDebug(`  [Tree Prefilter] ${passedTreeCandidates.length} candidates passed tree scoring and will proceed to LLM screening.`);
-                        if (candidatesToAudit.length === 0) {
-                            await logDebug(`  ⚠️ No candidates passed the tree pre-filter. Skipping LLM screening.`);
-                        }
-                    }
+                    continue;
                 }
-            } catch (err: any) {
-                await logDebug(`  [Tree Error] Failed execution: ${err.message}`);
-            } finally {
-                if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-                if (batchId) {
-                    const detail = activeBatchDetails.get(batchId);
-                    if (detail) {
-                        detail.processed += candidates.length;
-                        activeBatchDetails.set(batchId, detail);
+
+                if (r.tree_score >= 0.5) {
+                    await saveScreeningResult(
+                        r.profile_url,
+                        a.companyName,
+                        a.jobName,
+                        'PASS',
+                        `Tree Score: ${r.tree_score.toFixed(3)}`,
+                    );
+                    if (a.screeningEngine === 'tree') {
+                        a.passedCandidateUrls.push(r.profile_url);
+                        if (candObj) {
+                            a.passedForCsv.push(candObj);
+                            if (a.spreadsheetId) {
+                                await googleSheetsService.appendSingleCandidate(
+                                    a.spreadsheetId,
+                                    candObj,
+                                    a.existingSheetUrls,
+                                    a.recipients,
+                                );
+                            }
+                        }
                     }
+                    if (candObj) {
+                        candObj._treeScore = r.tree_score;
+                        candObj._langScore = r.lang_infer_score;
+                        passedTree.push(candObj);
+                    }
+                } else {
+                    await saveScreeningResult(
+                        r.profile_url,
+                        a.companyName,
+                        a.jobName,
+                        'REJECT',
+                        `Tree Score: ${r.tree_score.toFixed(3)}`,
+                    );
                 }
             }
+
+            logInfo('tree_scorer_complete', { scored: results.length, passed: passedTree.length });
+        } catch (err) {
+            logError('tree_scorer_failed', err);
+        } finally {
+            recordBatchProgress(a.batchId, candidates.length);
         }
-        
-        if ((screeningEngine === 'llm' || screeningEngine === 'tree_llm') && candidatesToAudit.length > 0) {
-            // --- LLM Audit Path with Adaptive Concurrency ---
-            const isNvidia = targetModel.startsWith('nvidia:');
-            // NVIDIA NIM free tier allows ~40 RPM — start conservatively to avoid burning retries
-            const MAX_CONCURRENCY = isNvidia ? 4 : 10;
-            const MIN_CONCURRENCY = 1;
-            let currentConcurrency = isNvidia ? 2 : 5;
-            
-            logDebug(`\nStarting adaptive verification pipeline for ${candidatesToAudit.length} candidates using model: ${targetModel} (initial concurrency: ${currentConcurrency}, max: ${MAX_CONCURRENCY})`);
-            
-            const profileUrls = candidatesToAudit.map(c => c.profile_url || 'N/A').filter(url => url !== 'N/A');
-            const alreadySentSet = (!bypassDeduplication && emailsList.length > 0)
-                ? await getSentCandidatesBatch(profileUrls, emailsList, companyName)
+
+        return { candidates, passedTree };
+    }
+
+    // ── LLM audit path ───────────────────────────────────────────────────────
+    private async runLlmAudit(a: {
+        jdText: string;
+        companyName: string;
+        jobName: string;
+        targetModel: string;
+        adjacentRoles: string;
+        candidatesToAudit: NormalisedCandidate[];
+        screenedSet: Map<string, 'PASS' | 'REJECT'>;
+        bypassDeduplication: boolean;
+        emailsList: string[];
+        spreadsheetId: string;
+        existingSheetUrls: Set<string>;
+        recipients: string;
+        batchId?: number;
+        passedCandidateUrls: string[];
+        passedForCsv: NormalisedCandidate[];
+    }): Promise<void> {
+        const isNvidia = a.targetModel.startsWith('nvidia:');
+        const MAX_CONCURRENCY = isNvidia ? 4 : 10;
+        const MIN_CONCURRENCY = 1;
+        const RAMP_UP_THRESHOLD = 15;
+        let currentConcurrency = isNvidia ? 2 : 5;
+
+        const total = a.candidatesToAudit.length;
+        logInfo('llm_audit_started', {
+            total,
+            model: a.targetModel,
+            concurrency: currentConcurrency,
+        });
+
+        const profileUrls = a.candidatesToAudit
+            .map((c) => c.profile_url)
+            .filter((u) => u !== 'N/A');
+        const alreadySent =
+            !a.bypassDeduplication && a.emailsList.length > 0
+                ? await getSentCandidatesBatch(profileUrls, a.emailsList, a.companyName)
                 : new Set<string>();
 
-            // Track rate-limit backpressure for adaptive concurrency
-            let consecutiveSuccesses = 0;
-            let rateLimitHits = 0;
-            const RAMP_UP_THRESHOLD = 15; // Ramp up after 15 consecutive successes
+        let processed = 0;
+        let consecutiveSuccesses = 0;
+        let rateLimitHits = 0;
 
-            // Process candidates in dynamic-sized waves
-            let processed = 0;
-            const totalToProcess = candidatesToAudit.length;
+        while (processed < total) {
+            const waveSize = Math.min(currentConcurrency, total - processed);
+            const wave = a.candidatesToAudit.slice(processed, processed + waveSize);
 
-            while (processed < totalToProcess) {
-                const waveSize = Math.min(currentConcurrency, totalToProcess - processed);
-                const wave = candidatesToAudit.slice(processed, processed + waveSize);
-                const waveStart = Date.now();
-
-                const waveResults = await Promise.allSettled(wave.map(async (candidate, waveIdx) => {
-                    const i = processed + waveIdx;
-                    const name = candidate.name || 'Unknown';
-                    const profileUrl = candidate.profile_url || 'N/A';
-
-                    if (!bypassDeduplication && profileUrl !== 'N/A') {
-                        const previousVerdict = screenedSet.get(profileUrl);
-                        if (previousVerdict) {
-                            await logDebug(`  [Batch#${batchId}] [${i + 1}/${totalToProcess}] ⏭️ SKIPPED (Already screened: ${previousVerdict}): ${name}`);
-                            if (previousVerdict === 'PASS') {
-                                passedCandidateUrls.push(profileUrl);
-                            }
-                            if (batchId) {
-                                const detail = activeBatchDetails.get(batchId);
-                                if (detail) {
-                                    detail.processed++;
-                                    activeBatchDetails.set(batchId, detail);
-                                }
-                            }
-                            return { status: 'skipped' as const };
-                        }
-                    }
-
+            const results = await Promise.allSettled(
+                wave.map(async (candidate) => {
+                    const url = candidate.profile_url;
                     try {
-                        const candidateStart = Date.now();
-                        const { isMatch, reasoning, auditJson, rateLimited } = await screeningAgent.verificationAgent(jdText, candidate, targetModel, adjacentRoles);
-                        const elapsed = ((Date.now() - candidateStart) / 1000).toFixed(1);
-
-                        if (rateLimited) {
-                            return { status: 'rate_limited' as const, isMatch, reasoning, auditJson, name, profileUrl, elapsed };
+                        if (!a.bypassDeduplication && url !== 'N/A') {
+                            if (alreadySent.has(url)) return { status: 'skipped' as const };
+                            const prior = a.screenedSet.get(url);
+                            if (prior) {
+                                if (prior === 'PASS') a.passedCandidateUrls.push(url);
+                                return { status: 'skipped' as const };
+                            }
                         }
+
+                        const { isMatch, reasoning, rateLimited } =
+                            await screeningAgent.verificationAgent(
+                                a.jdText,
+                                candidate,
+                                a.targetModel,
+                                a.adjacentRoles,
+                            );
+
+                        if (rateLimited) return { status: 'rate_limited' as const };
 
                         if (isMatch) {
-                            await logDebug(`  [Batch#${batchId}] [${i + 1}/${totalToProcess}] ✅ PASS: ${name} (${elapsed}s)`);
-                            passedCandidateUrls.push(profileUrl);
-                            await saveScreeningResult(profileUrl, companyName, jobName, 'PASS', reasoning);
-                            await this.savePassedCandidateLogs(candidate, profileUrl);
-                            if (spreadsheetId) {
-                                await googleSheetsService.appendSingleCandidate(spreadsheetId, candidate, existingSheetUrls, testTo);
+                            a.passedCandidateUrls.push(url);
+                            a.passedForCsv.push(candidate);
+                            await saveScreeningResult(
+                                url,
+                                a.companyName,
+                                a.jobName,
+                                'PASS',
+                                reasoning,
+                            );
+                            if (a.spreadsheetId) {
+                                await googleSheetsService.appendSingleCandidate(
+                                    a.spreadsheetId,
+                                    candidate,
+                                    a.existingSheetUrls,
+                                    a.recipients,
+                                );
                             }
                         } else {
-                            await logDebug(`  [Batch#${batchId}] [${i + 1}/${totalToProcess}] ❌ REJECT: ${name} - ${reasoning} (${elapsed}s)`);
-                            await saveScreeningResult(profileUrl, companyName, jobName, 'REJECT', reasoning);
-                            await logSkipped(candidate, "Verification Agent", reasoning);
+                            await saveScreeningResult(
+                                url,
+                                a.companyName,
+                                a.jobName,
+                                'REJECT',
+                                reasoning,
+                            );
+                            void logSkipped(candidate, 'Verification Agent', reasoning);
                         }
-                        return { status: 'success' as const, isMatch, name };
-                    } catch (err: any) {
-                        logDebug(`  [Batch#${batchId}] [${i + 1}/${totalToProcess}] ⚠️ ERROR: ${name} - ${err.message}`);
-                        return { status: 'error' as const, name };
+                        return { status: 'success' as const };
+                    } catch (err) {
+                        logError('candidate_screening_failed', err, { name: candidate.name });
+                        return { status: 'error' as const };
                     } finally {
-                        if (batchId) {
-                            const detail = activeBatchDetails.get(batchId);
-                            if (detail) {
-                                detail.processed++;
-                                activeBatchDetails.set(batchId, detail);
-                            }
-                        }
+                        recordBatchProgress(a.batchId);
                     }
-                }));
+                }),
+            );
 
-                // Analyze wave results for adaptive concurrency
-                let waveRateLimited = false;
-                for (const r of waveResults) {
-                    if (r.status === 'fulfilled' && r.value.status === 'rate_limited') {
-                        waveRateLimited = true;
-                        rateLimitHits++;
-                    }
+            const waveRateLimited = results.some(
+                (r) => r.status === 'fulfilled' && r.value.status === 'rate_limited',
+            );
+
+            if (waveRateLimited) {
+                rateLimitHits++;
+                const previous = currentConcurrency;
+                currentConcurrency = Math.max(MIN_CONCURRENCY, Math.floor(currentConcurrency / 2));
+                consecutiveSuccesses = 0;
+                if (previous !== currentConcurrency) {
+                    logWarn('concurrency_reduced', { from: previous, to: currentConcurrency });
                 }
-
-                if (waveRateLimited) {
-                    const oldConcurrency = currentConcurrency;
-                    currentConcurrency = Math.max(MIN_CONCURRENCY, Math.floor(currentConcurrency / 2));
-                    consecutiveSuccesses = 0;
-                    if (currentConcurrency !== oldConcurrency) {
-                        logDebug(`  [Adaptive] ⚡ Rate limit detected — reducing concurrency: ${oldConcurrency} → ${currentConcurrency}`);
-                    }
-                    // Long cooldown after a rate-limited wave to let the API window fully reset
-                    const cooldown = 10000 + Math.random() * 5000;
-                    logDebug(`  [Adaptive] Cooling down ${(cooldown / 1000).toFixed(1)}s before next wave...`);
-                    await new Promise(resolve => setTimeout(resolve, cooldown));
-                } else {
-                    consecutiveSuccesses += waveSize;
-                    if (consecutiveSuccesses >= RAMP_UP_THRESHOLD && currentConcurrency < MAX_CONCURRENCY) {
-                        const oldConcurrency = currentConcurrency;
-                        currentConcurrency = Math.min(MAX_CONCURRENCY, currentConcurrency + 1);
-                        consecutiveSuccesses = 0;
-                        if (currentConcurrency !== oldConcurrency) {
-                            logDebug(`  [Adaptive] 🚀 Sustained success — increasing concurrency: ${oldConcurrency} → ${currentConcurrency}`);
-                        }
-                    }
-                    // Brief inter-wave pause even on success to maintain steady throughput
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-
-                processed += waveSize;
-                const waveElapsed = ((Date.now() - waveStart) / 1000).toFixed(1);
-                if (processed < totalToProcess) {
-                    logDebug(`  [Progress] ${processed}/${totalToProcess} candidates processed (wave: ${waveSize} in ${waveElapsed}s, concurrency: ${currentConcurrency}, 429s: ${rateLimitHits})`);
-                }
-            }
-
-            logDebug(`  [Adaptive Summary] Finished ${totalToProcess} candidates. Total 429 hits: ${rateLimitHits}. Final concurrency: ${currentConcurrency}.`);
-        }
-
-        if (passedCandidateUrls.length > 0) {
-            // ML Risk Scoring & Sorting
-            let riskData: Record<string, { hazard: number, move_prob: number, tenure: number, median_tenure?: number }> = {};
-            try {
-                await logDebug(`\nScoring ${passedCandidateUrls.length} candidates for attrition risk...`);
-                const pythonScript = path.resolve(__dirname, '../../../machine_learning/src/inference.py');
-                const pythonDir = path.dirname(pythonScript);
-                const { stdout, stderr } = await execPromise(`echo '${JSON.stringify(passedCandidateUrls)}' | PYTHONPATH="${pythonDir}" python3 "${pythonScript}"`);
-                if (stderr) await logDebug(`  [Scoring Warning] ${stderr}`);
-                riskData = JSON.parse(stdout);
-            } catch (error: any) {
-                await logDebug(`  [Scoring Error] Failed to get risk scores: ${error.message}`);
-            }
-            // Filter out extremely stable candidates (e.g. move_prob < 0.02)
-            const filteredUrls = passedCandidateUrls.filter(url => {
-                const d = riskData[url];
-                return d ? d.move_prob >= 0.02 : true;
-            });
-
-            // Sort
-            const sortedUrls = [...filteredUrls].sort((a, b) => {
-                const dataA = riskData[a] || { hazard: 0, move_prob: 0, tenure: 0 };
-                const dataB = riskData[b] || { hazard: 0, move_prob: 0, tenure: 0 };
-                
-                if (dataB.move_prob !== dataA.move_prob) return dataB.move_prob - dataA.move_prob;
-                if (dataB.hazard !== dataA.hazard) return dataB.hazard - dataA.hazard;
-                return dataB.tenure - dataA.tenure;
-            });
-
-            // Backfill ML Risk Scores into Google Sheets
-            if (spreadsheetId && Object.keys(riskData).length > 0) {
-                await googleSheetsService.backfillRiskScores(spreadsheetId, riskData);
-            }
-            
-            let sheetUrl = spreadsheetId ? googleSheetsService.getSpreadsheetUrl(spreadsheetId) : '';
-            let newCount = sortedUrls.length; // Informational only, actual count is dynamically handled during append
-
-            const subject = `${newCount} new candidates added for ${jobName} at ${companyName}`;
-            const body = sheetUrl
-                ? [
-                    `${newCount} new candidates have been added to the spreadsheet.`,
-                    ``,
-                    `📊 View spreadsheet: ${sheetUrl}`,
-                    ``,
-                    `---`,
-                    `Screening model: ${targetModel}`,
-                ].join('\n')
-                : (() => {
-                    const formattedBodyUrls = sortedUrls.map(url => {
-                        const d = riskData[url] as any;
-                        const cand = candidates.find(c => c.profile_url === url);
-                        const treeStr = cand && cand._treeScore !== undefined ? ` | TreeScore: ${cand._treeScore.toFixed(2)} | Lang: ${cand._langScore}/3` : '';
-                        if (!d) return `${url} (Risk: N/A${treeStr})`;
-                        const badge = d.move_prob >= 0.15 ? '[RESTLESS]' : '[STABLE]';
-                        return `${badge.padEnd(22)} | Hazard: ${d.hazard.toFixed(2)} | Move Prob: ${(d.move_prob * 100).toFixed(2)}% | Tenure: ${d.tenure.toFixed(1)}mo${treeStr} | URL: ${url}`;
-                    }).join('\n');
-                    return `Here are the LinkedIn URLs of the candidates that passed the verification steps:\n\n${formattedBodyUrls}\n\n---\nScreening model: ${targetModel}`;
-                })();
-
-            const emailSent = await emailService.sendEmail(subject, body, testTo, testCc);
-
-            if (emailSent) {
-                for (const url of passedCandidateUrls) {
-                    if (url !== 'N/A' && emailsList.length > 0) {
-                        await logOutreachSent(url, emailsList, companyName, jobName);
-                    }
-                }
-                await logDebug(`  [DB] Marked ${passedCandidateUrls.length} candidates as sent in dedup database.`);
+                await new Promise((r) => setTimeout(r, 10_000 + Math.random() * 5_000));
             } else {
-                await logDebug(`  ⚠️ Email failed to send — candidates NOT marked as sent. They will be re-processed on next run.`);
+                consecutiveSuccesses += waveSize;
+                if (
+                    consecutiveSuccesses >= RAMP_UP_THRESHOLD &&
+                    currentConcurrency < MAX_CONCURRENCY
+                ) {
+                    currentConcurrency = Math.min(MAX_CONCURRENCY, currentConcurrency + 1);
+                    consecutiveSuccesses = 0;
+                    logInfo('concurrency_increased', { to: currentConcurrency });
+                }
+                await new Promise((r) => setTimeout(r, 500));
             }
+
+            processed += waveSize;
         }
 
-        logDebug(`\nCampaign Complete! Processed ${candidates.length} candidates.`);
+        logInfo('llm_audit_complete', {
+            total,
+            passed: a.passedCandidateUrls.length,
+            rateLimitHits,
+            finalConcurrency: currentConcurrency,
+        });
     }
 }
 
