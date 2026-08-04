@@ -57,6 +57,9 @@ export interface ScreeningOptions {
     readonly treeTopK?: number;
     readonly minExp?: number;
     readonly maxExp?: number;
+    readonly companyName: string;
+    readonly jobName: string;
+    readonly batchId?: number;
 }
 
 // ── Ports ───────────────────────────────────────────────────────────────────

@@ -84,28 +84,12 @@ export default defineConfig(({ mode }) => {
     ],
     build: {
       target: 'es2022',
-      // 'hidden' emits maps for error tracking without referencing them from
-      // the shipped bundle, so sources are not exposed to visitors.
-      sourcemap: 'hidden',
+      sourcemap: 'hidden',              // uploaded to error tracking, not served
       cssCodeSplit: true,
       reportCompressedSize: false,
       chunkSizeWarningLimit: 500,
-      rollupOptions: {
-        output: {
-          // Function form: Vite 8 bundles with rolldown, which does not accept
-          // the object shorthand. Splitting these out keeps the app chunk small
-          // and lets the vendor chunks cache independently across deploys.
-          manualChunks(id: string) {
-            if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
-              return 'react';
-            }
-            if (id.includes('node_modules/framer-motion')) return 'motion';
-            if (id.includes('node_modules/lucide-react')) return 'icons';
-            return undefined;
-          },
-        },
-      },
     },
+    esbuild: false,
     // NOTE: no esbuild.drop/pure here — Vite 8 bundles with rolldown, which
     // does not expose those options. console.error is retained deliberately
     // so runtime diagnostics still surface in production.

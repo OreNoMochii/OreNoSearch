@@ -1,0 +1,227 @@
+/* ── Text-like controls ─────────────────────────────────────────────────── */
+.control {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: var(--text-base);
+    line-height: 1.5;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.control::placeholder {
+    color: var(--text-muted);
+}
+
+.control:hover:not(:disabled) {
+    border-color: var(--border-strong);
+}
+
+.control:focus-visible {
+    outline: none; /* replaced by the ring below, which is higher contrast */
+    border-color: var(--accent-500);
+    box-shadow: 0 0 0 3px rgb(59 130 246 / 0.25);
+}
+
+.control:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.control[aria-invalid='true'] {
+    border-color: var(--danger-fg);
+}
+
+.textarea {
+    resize: vertical;
+    min-height: 6rem;
+}
+
+.select {
+    cursor: pointer;
+    /* Native arrow is hidden on some engines once a background is set. */
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+        linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+        calc(100% - 18px) calc(50% + 2px),
+        calc(100% - 13px) calc(50% + 2px);
+    background-size:
+        5px 5px,
+        5px 5px;
+    background-repeat: no-repeat;
+    padding-inline-end: var(--space-8);
+}
+
+/* ── Checkbox ───────────────────────────────────────────────────────────── */
+.checkboxRow {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+}
+
+.checkbox {
+    /* 18px visual box inside a 44px touch target via the row padding. */
+    inline-size: 18px;
+    block-size: 18px;
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent-500);
+    cursor: pointer;
+}
+
+.checkboxText {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.checkboxLabel {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 1.4;
+}
+
+.checkboxHelp {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+/* ── Button ─────────────────────────────────────────────────────────────── */
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+
+    /* WCAG 2.5.8 minimum target size. */
+    min-height: var(--target-min);
+    padding: var(--space-3) var(--space-5);
+
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        opacity 0.15s ease;
+}
+
+.button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.primary {
+    background: var(--accent-600);
+    color: var(--text-on-accent);
+}
+.primary:hover:not(:disabled) {
+    background: var(--accent-500);
+}
+
+.secondary {
+    background: transparent;
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+.secondary:hover:not(:disabled) {
+    background: var(--surface-hover);
+}
+
+.ghost {
+    background: transparent;
+    color: var(--text-muted);
+}
+.ghost:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+.danger {
+    background: var(--danger-subtle-bg);
+    border-color: var(--danger-fg);
+    color: var(--danger-fg);
+}
+.danger:hover:not(:disabled) {
+    background: rgb(239 68 68 / 0.25);
+}
+
+.success {
+    background: var(--success-subtle-bg);
+    border-color: var(--success-fg);
+    color: var(--success-fg);
+}
+.success:hover:not(:disabled) {
+    background: rgb(16 185 129 / 0.25);
+}
+
+.fullWidth {
+    width: 100%;
+}
+
+.spinner {
+    inline-size: 1em;
+    block-size: 1em;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: var(--radius-full);
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Chip ───────────────────────────────────────────────────────────────── */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1);
+    background: var(--accent-subtle-bg);
+    border: 1px solid var(--accent-subtle-border);
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    color: var(--text-primary);
+}
+
+.chipRemove {
+    display: grid;
+    place-items: center;
+    inline-size: 20px;
+    block-size: 20px;
+    padding: 0;
+    background: rgb(239 68 68 / 0.3);
+    border: 0;
+    border-radius: var(--radius-full);
+    color: var(--text-primary);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.chipRemove:hover {
+    background: rgb(239 68 68 / 0.55);
+}
+
+@media (max-width: 640px) {
+    .button {
+        width: 100%;
+    }
+}

@@ -66,6 +66,10 @@ export interface SearchHit {
 }
 
 export interface BooleanHit {
+  tree_score?: number;
+  pipeline_score?: number;
+  candidate_email?: string;
+  candidate_phone?: string;
   folder_id: string;
   full_name?: string;
   resume_drive_view_url?: string;

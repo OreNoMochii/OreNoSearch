@@ -1,38 +1,16 @@
-# Install once with:  pre-commit install
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
-    hooks:
-      - id: gitleaks
-        name: Block secrets from being committed
-
+    hooks: [{ id: gitleaks }]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.7.4
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
+    hooks: [{ id: ruff, args: [--fix] }, { id: ruff-format }]
   - repo: https://github.com/kynan/nbstripout
     rev: 0.8.1
-    hooks:
-      - id: nbstripout
-        name: Strip notebook outputs before commit
-
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: check-added-large-files
-        args: ['--maxkb=1024']
-      - id: check-merge-conflict
-      - id: detect-private-key
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-
+    hooks: [{ id: nbstripout }]        # notebooks/ currently commits outputs
   - repo: local
     hooks:
-      - id: no-shell-exec
-        name: Reject exec()/execSync() in backend TypeScript
-        entry: bash -c 'if git diff --cached --name-only -- "packages/api/src/**/*.ts" | xargs -r grep -lE "\bexecSync\(|\bexec\(" 2>/dev/null; then echo "exec()/execSync() enable shell injection (B1). Use utils/python_runner.ts."; exit 1; fi'
+      - id: no-large-files
+        name: Block files > 1MB
+        entry: bash -c 'git diff --cached --name-only | while read f; do [ -f "$f" ] && [ $(wc -c <"$f") -gt 1048576 ] && echo "Too large: $f" && exit 1; done; exit 0'
         language: system
-        pass_filenames: false

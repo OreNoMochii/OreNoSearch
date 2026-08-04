@@ -1,15 +1,1 @@
-{
-  "semi": true,
-  "singleQuote": true,
-  "trailingComma": "all",
-  "printWidth": 100,
-  "tabWidth": 4,
-  "arrowParens": "always",
-  "endOfLine": "lf",
-  "overrides": [
-    {
-      "files": ["packages/web/**/*.{ts,tsx,css}", "*.json", "*.yml", "*.yaml"],
-      "options": { "tabWidth": 2 }
-    }
-  ]
-}
+{ "semi": true, "singleQuote": true, "trailingComma": "all", "printWidth": 100, "arrowParens": "always" }

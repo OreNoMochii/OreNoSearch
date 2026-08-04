@@ -6,13 +6,10 @@ import {
   X,
   Briefcase,
   MapPin,
-  Building2,
-  FileText,
-  Activity,
+      Activity,
   Download,
   Ban,
-  GraduationCap,
-  Info,
+    Info,
 } from 'lucide-react';
 import {
   runBooleanSearch,
@@ -22,9 +19,11 @@ import {
 } from './searchClient';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Modal } from './components/Modal';
-import { ExpandableSummary } from './components/ExpandableSummary';
 import { QueueMonitor } from './components/QueueMonitor';
 import { useQueueStatus } from './hooks/useQueueStatus';
+import { OutreachForm } from './components/OutreachForm';
+import { CandidateCard } from './components/CandidateCard';
+
 
 const API_BASE_URL = '';
 
@@ -453,7 +452,7 @@ function App() {
 
         <main
           id="main-content"
-          style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}
+          className="main-grid"
         >
           <motion.div
             className="glass-panel"
@@ -1453,217 +1452,7 @@ function App() {
                   </div>
                 ) : (
                   results.map((hit, idx) => (
-                    <motion.div
-                      key={hit.folder_id}
-                      className="glass-panel"
-                      initial={{ opacity: 0, scale: 0.98 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: idx * 0.05 }}
-                      style={{ padding: '1.5rem' }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'flex-start',
-                          marginBottom: '1rem',
-                        }}
-                      >
-                        <div>
-                          <h2
-                            style={{ fontSize: '1.4rem', color: '#fff', marginBottom: '0.25rem' }}
-                          >
-                            {hit.full_name}
-                          </h2>
-                          {hit.resume_drive_view_url && (
-                            <a
-                              href={hit.resume_drive_view_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                fontSize: '0.85rem',
-                                color: '#38bdf8',
-                                textDecoration: 'underline',
-                                opacity: 0.9,
-                              }}
-                            >
-                              {hit.resume_drive_view_url}
-                            </a>
-                          )}
-                        </div>
-                        {hit.resume_drive_view_url && (
-                          <a
-                            href={hit.resume_drive_view_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              background: 'rgba(255,255,255,0.1)',
-                              padding: '0.4rem 0.8rem',
-                              borderRadius: '0.5rem',
-                              fontSize: '0.8rem',
-                              color: '#fff',
-                              textDecoration: 'none',
-                              fontWeight: 500,
-                              flexShrink: 0,
-                              marginLeft: '1rem',
-                            }}
-                          >
-                            Open Link ↗
-                          </a>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                          gap: '1rem',
-                          marginBottom: '1.5rem',
-                          paddingBottom: '1.5rem',
-                          borderBottom: '1px solid rgba(255,255,255,0.1)',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: '0.75rem',
-                            gridColumn: '1 / -1',
-                          }}
-                        >
-                          <FileText
-                            size={18}
-                            style={{ color: '#8b5cf6', marginTop: '0.1rem', flexShrink: 0 }}
-                          />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div
-                              style={{
-                                fontSize: '0.75rem',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.05em',
-                                color: 'var(--text-muted)',
-                                marginBottom: '0.25rem',
-                              }}
-                            >
-                              Summary
-                            </div>
-                            <ExpandableSummary text={hit.candidate_summary || ''} maxLength={150} />
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                          <Briefcase size={18} style={{ color: '#3b82f6', marginTop: '0.1rem' }} />
-                          <div>
-                            <div
-                              style={{
-                                fontSize: '0.75rem',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.05em',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              Latest Role
-                            </div>
-                            <div style={{ fontWeight: 500 }}>{hit.ai_latest_role}</div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                          <Building2 size={18} style={{ color: '#10b981', marginTop: '0.1rem' }} />
-                          <div>
-                            <div
-                              style={{
-                                fontSize: '0.75rem',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.05em',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              Latest Company
-                            </div>
-                            <div style={{ fontWeight: 500 }}>{hit.ai_latest_company}</div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                          <MapPin size={18} style={{ color: '#f59e0b', marginTop: '0.1rem' }} />
-                          <div>
-                            <div
-                              style={{
-                                fontSize: '0.75rem',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.05em',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              Location
-                            </div>
-                            <div style={{ fontWeight: 500 }}>{hit.ai_latest_location}</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div
-                        style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}
-                      >
-                        <div>
-                          <div
-                            style={{
-                              fontSize: '0.75rem',
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.05em',
-                              color: 'var(--text-muted)',
-                              marginBottom: '0.5rem',
-                            }}
-                          >
-                            Experience
-                          </div>
-                          <p
-                            style={{
-                              fontSize: '0.9rem',
-                              lineHeight: '1.6',
-                              color: 'rgba(255,255,255,0.85)',
-                              margin: 0,
-                              whiteSpace: 'pre-line',
-                            }}
-                          >
-                            {hit.resume_text_excerpt}
-                          </p>
-                        </div>
-                        {hit.education && (
-                          <div>
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                marginBottom: '0.5rem',
-                              }}
-                            >
-                              <GraduationCap size={14} style={{ color: '#a78bfa' }} />
-                              <div
-                                style={{
-                                  fontSize: '0.75rem',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.05em',
-                                  color: 'var(--text-muted)',
-                                }}
-                              >
-                                Education
-                              </div>
-                            </div>
-                            <p
-                              style={{
-                                fontSize: '0.9rem',
-                                lineHeight: '1.6',
-                                color: 'rgba(255,255,255,0.85)',
-                                margin: 0,
-                                whiteSpace: 'pre-line',
-                              }}
-                            >
-                              {hit.education}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </motion.div>
+                    <CandidateCard key={hit.folder_id} hit={hit} idx={idx} />
                   ))
                 )}
               </div>
@@ -1685,10 +1474,26 @@ function App() {
             titleId={outreachTitleId}
             title="Trigger AI Screening"
           >
-            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+            <OutreachForm
+              jobName={jobName}
+              setJobName={setJobName}
+              companyName={companyName}
+              setCompanyName={setCompanyName}
+              adjacentRoles={adjacentRoles}
+              setAdjacentRoles={setAdjacentRoles}
+              outreachEmail={outreachEmail}
+              setOutreachEmail={setOutreachEmail}
+              outreachJd={outreachJd}
+              setOutreachJd={setOutreachJd}
+              isSubmitting={isSubmitting}
+              status={outreachStatus}
+              onSubmit={handleOutreachSubmit}
+              onCancel={() => setIsOutreachModalOpen(false)}
+              showAdjacentRoles={screeningEngine === 'llm' || screeningEngine === 'tree_llm'}
+            >
               <p
                 style={{
-                  color: '#cbd5e1',
+                  color: 'var(--text-secondary)',
                   fontSize: '0.95rem',
                   marginBottom: '1.5rem',
                   marginTop: 0,
@@ -1704,8 +1509,8 @@ function App() {
               {(screeningEngine === 'llm' || screeningEngine === 'tree_llm') && (
                 <>
                   <div className="input-group">
-                    <label style={{ color: '#f1f5f9' }}>
-                      AI Provider <span style={{ color: '#ef4444' }}>*</span>
+                    <label style={{ color: 'var(--text-primary)' }}>
+                      AI Provider <span style={{ color: 'var(--danger-fg)' }}>*</span>
                     </label>
                     <select
                       value={selectedProvider}
@@ -1719,176 +1524,50 @@ function App() {
                         }
                       }}
                       style={{
-                        background: 'rgba(15, 23, 42, 0.5)',
+                        background: 'var(--surface-input)',
                         padding: '0.75rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid rgba(255,255,255,0.2)',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-strong)',
                         width: '100%',
                         outline: 'none',
-                        color: '#fff',
+                        color: 'var(--text-primary)',
                         cursor: 'pointer',
                         marginBottom: '1rem',
                       }}
                     >
-                      <option value="deepinfra" style={{ background: '#1e293b' }}>
-                        DeepInfra
-                      </option>
-                      <option value="nvidia" style={{ background: '#1e293b' }}>
-                        NVIDIA NIM
-                      </option>
+                      <option value="deepinfra" style={{ background: 'var(--surface-overlay)' }}>DeepInfra</option>
+                      <option value="nvidia" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM</option>
                     </select>
                   </div>
 
                   <div className="input-group">
-                    <label style={{ color: '#f1f5f9' }}>
-                      Analytical Model <span style={{ color: '#ef4444' }}>*</span>
+                    <label style={{ color: 'var(--text-primary)' }}>
+                      Analytical Model <span style={{ color: 'var(--danger-fg)' }}>*</span>
                     </label>
                     <select
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
                       style={{
-                        background: 'rgba(15, 23, 42, 0.5)',
+                        background: 'var(--surface-input)',
                         padding: '0.75rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid rgba(255,255,255,0.2)',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-strong)',
                         width: '100%',
                         outline: 'none',
-                        color: '#fff',
+                        color: 'var(--text-primary)',
                         cursor: 'pointer',
                       }}
                     >
                       {selectedProvider === 'deepinfra' && (
                         <>
-                          <option
-                            value="deepseek-ai/DeepSeek-V3.2"
-                            style={{ background: '#1e293b' }}
-                          >
-                            DeepSeek V3.2 ($0.26 in / $0.38 out per 1M)
-                          </option>
-                          <option value="deepseek-ai/DeepSeek-R1" style={{ background: '#1e293b' }}>
-                            DeepSeek R1 ($0.50 in / $2.15 out per 1M)
-                          </option>
-                          <option
-                            value="deepseek-ai/DeepSeek-V4-Pro"
-                            style={{ background: '#1e293b' }}
-                          >
-                            DeepSeek V4 Pro ($0.145 cached, $1.74 in, $3.48 out / 1M)
-                          </option>
-                          <option
-                            value="deepseek-ai/DeepSeek-V4-Flash"
-                            style={{ background: '#1e293b' }}
-                          >
-                            DeepSeek V4 Flash ($0.028 cached, $0.14 in, $0.28 out / 1M)
-                          </option>
-                          <option value="google/gemma-4-31B-it" style={{ background: '#1e293b' }}>
-                            Gemma-4-31B-it ($0.13 in, $0.38 out / 1M)
-                          </option>
-                          <option value="Qwen/Qwen3.6-35B-A3B" style={{ background: '#1e293b' }}>
-                            Qwen3.6-35B-A3B ($0.20 in, $1.00 out / 1M)
-                          </option>
-                          <option value="moonshotai/Kimi-K2.6" style={{ background: '#1e293b' }}>
-                            Kimi K2.6 ($0.55 in / $2.50 out per 1M)
-                          </option>
-                          <option value="zai-org/GLM-5.1" style={{ background: '#1e293b' }}>
-                            GLM 5.1 ($1.40 in / $4.40 out per 1M)
-                          </option>
-                          <option
-                            value="stepfun-ai/Step-3.5-Flash"
-                            style={{ background: '#1e293b' }}
-                          >
-                            Step-3.5-Flash ($0.10 in / $0.30 out per 1M)
-                          </option>
-                          <option value="MiniMaxAI/MiniMax-M2.5" style={{ background: '#1e293b' }}>
-                            MiniMax-M2.5 ($0.27 in / $0.95 out per 1M)
-                          </option>
-                          <option value="openai/gpt-oss-120b" style={{ background: '#1e293b' }}>
-                            GPT OSS 120B
-                          </option>
+                          <option value="deepseek-ai/DeepSeek-V3.2" style={{ background: 'var(--surface-overlay)' }}>DeepSeek V3.2</option>
+                          <option value="deepseek-ai/DeepSeek-R1" style={{ background: 'var(--surface-overlay)' }}>DeepSeek R1</option>
                         </>
                       )}
                       {selectedProvider === 'nvidia' && (
                         <>
-                          <option
-                            value="nvidia:meta/llama-3.1-70b-instruct"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Llama 3.1 70B
-                          </option>
-                          <option
-                            value="nvidia:meta/llama-3.1-405b-instruct"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Llama 3.1 405B
-                          </option>
-                          <option
-                            value="nvidia:google/gemma-4-31b-it"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Gemma 4 31B IT
-                          </option>
-                          <option
-                            value="nvidia:nvidia/llama-3.1-nemotron-70b-instruct"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Nemotron 70B
-                          </option>
-                          <option
-                            value="nvidia:deepseek-ai/deepseek-v4-pro"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: DeepSeek V4 Pro
-                          </option>
-                          <option
-                            value="nvidia:deepseek-ai/deepseek-v4-flash"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: DeepSeek V4 Flash
-                          </option>
-                          <option
-                            value="nvidia:minimaxai/minimax-m2.7"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: MiniMax M2.7
-                          </option>
-                          <option
-                            value="nvidia:moonshotai/kimi-k2-thinking"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Kimi K2 Thinking
-                          </option>
-                          <option
-                            value="nvidia:moonshotai/kimi-k2.6"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Kimi K2.6
-                          </option>
-                          <option value="nvidia:z-ai/glm-5.1" style={{ background: '#1e293b' }}>
-                            NVIDIA NIM: GLM 5.1
-                          </option>
-                          <option
-                            value="nvidia:nvidia/nemotron-3-super-120b-a12b"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Nemotron 3 Super 120B
-                          </option>
-                          <option
-                            value="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Nemotron 3 Nano Omni Reasoning
-                          </option>
-                          <option
-                            value="nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: Llama 3.3 Nemotron Super 49B
-                          </option>
-                          <option
-                            value="nvidia:openai/gpt-oss-120b"
-                            style={{ background: '#1e293b' }}
-                          >
-                            NVIDIA NIM: GPT OSS 120B
-                          </option>
+                          <option value="nvidia:meta/llama-3.1-70b-instruct" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM: Llama 3.1 70B</option>
+                          <option value="nvidia:meta/llama-3.1-405b-instruct" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM: Llama 3.1 405B</option>
                         </>
                       )}
                     </select>
@@ -1896,130 +1575,7 @@ function App() {
                 </>
               )}
 
-              <div className="input-group">
-                <label style={{ color: '#f1f5f9' }}>
-                  Job Name <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  value={jobName}
-                  onChange={(e) => setJobName(e.target.value)}
-                  required
-                  placeholder="e.g. Senior Software Engineer"
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.5)',
-                    padding: '0.75rem',
-                    borderRadius: '0.5rem',
-                    border: '1px solid rgba(255,255,255,0.2)',
-                    width: '100%',
-                    outline: 'none',
-                    color: '#fff',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-
-              <div className="input-group">
-                <label style={{ color: '#f1f5f9' }}>
-                  Company Name <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                  required
-                  placeholder="e.g. Metaview"
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.5)',
-                    padding: '0.75rem',
-                    borderRadius: '0.5rem',
-                    border: '1px solid rgba(255,255,255,0.2)',
-                    width: '100%',
-                    outline: 'none',
-                    color: '#fff',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-
-              {(screeningEngine === 'llm' || screeningEngine === 'tree_llm') && (
-                <div className="input-group">
-                  <label style={{ color: '#f1f5f9' }}>Adjacent Roles (comma separated)</label>
-                  <input
-                    type="text"
-                    value={adjacentRoles}
-                    onChange={(e) => setAdjacentRoles(e.target.value)}
-                    placeholder="e.g. AI Researcher, Applied Scientist, ML Engineer"
-                    style={{
-                      background: 'rgba(15, 23, 42, 0.5)',
-                      padding: '0.75rem',
-                      borderRadius: '0.5rem',
-                      border: '1px solid rgba(255,255,255,0.2)',
-                      width: '100%',
-                      outline: 'none',
-                      color: '#fff',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                  <span
-                    style={{
-                      color: '#94a3b8',
-                      fontSize: '0.8rem',
-                      marginTop: '0.4rem',
-                      display: 'block',
-                    }}
-                  >
-                    Tell the AI to also accept these roles as valid matches for the JD.
-                  </span>
-                </div>
-              )}
-
-              <div className="input-group">
-                <label style={{ color: '#f1f5f9' }}>
-                  Paste Full Job Description <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <textarea
-                  value={outreachJd}
-                  onChange={(e) => setOutreachJd(e.target.value)}
-                  rows={6}
-                  required
-                  placeholder="Enter the Job Description details here. Include strict requirements so the AI knows what to evaluate against."
-                  style={{ background: 'rgba(15, 23, 42, 0.5)' }}
-                />
-              </div>
-
-              <div className="input-group">
-                <label style={{ color: '#f1f5f9' }}>
-                  Result Recipient Email(s) <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  value={outreachEmail}
-                  onChange={(e) => setOutreachEmail(e.target.value)}
-                  required
-                  placeholder="e.g. team@company.com, boss@company.com"
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.5)',
-                    padding: '0.75rem',
-                    borderRadius: '0.5rem',
-                    border: '1px solid rgba(255,255,255,0.2)',
-                    width: '100%',
-                    outline: 'none',
-                    color: '#fff',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-
-              <div
-                className="input-group"
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginTop: '0.5rem',
-                }}
-              >
+              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <input
                   type="checkbox"
                   id="bypassDeduplication"
@@ -2027,23 +1583,12 @@ function App() {
                   onChange={(e) => setBypassDeduplication(e.target.checked)}
                   style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                 />
-                <label
-                  htmlFor="bypassDeduplication"
-                  style={{ color: '#cbd5e1', cursor: 'pointer', fontSize: '0.9rem' }}
-                >
+                <label htmlFor="bypassDeduplication" style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>
                   Force Retry: Ignore submission history and screen everyone again.
                 </label>
               </div>
 
-              <div
-                className="input-group"
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginTop: '0.5rem',
-                }}
-              >
+              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <input
                   type="checkbox"
                   id="useCompanyIntel"
@@ -2051,479 +1596,69 @@ function App() {
                   onChange={(e) => setUseCompanyIntel(e.target.checked)}
                   style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                 />
-                <label
-                  htmlFor="useCompanyIntel"
-                  style={{ color: '#cbd5e1', cursor: 'pointer', fontSize: '0.9rem' }}
-                >
-                  Use Company Intel: Look up candidate companies in database and attach metadata
-                  (size, flight risk, etc) for the LLM.
+                <label htmlFor="useCompanyIntel" style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  Use Company Intel: Look up candidate companies in database and attach metadata.
                 </label>
               </div>
 
-              {/* ── Tree ML Settings ───────────────────────────────── */}
               {(screeningEngine === 'tree' || screeningEngine === 'tree_llm') && (
-                <div
-                  className="input-group"
-                  style={{
-                    borderTop: '1px solid rgba(255,255,255,0.08)',
-                    paddingTop: '1.2rem',
-                    marginTop: '0.5rem',
-                  }}
-                >
-                  <label
-                    style={{
-                      color: '#f1f5f9',
-                      fontWeight: 600,
-                      fontSize: '0.95rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      marginBottom: '0.5rem',
-                    }}
-                  >
+                <div className="input-group" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.2rem', marginTop: '0.5rem' }}>
+                  <label style={{ color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <span>🌳</span> ML Tree Settings
                   </label>
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1.2rem',
-                      background: 'rgba(139, 92, 246, 0.07)',
-                      borderRadius: '0.75rem',
-                      padding: '1rem 1.2rem',
-                      border: '1px solid rgba(139, 92, 246, 0.2)',
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'baseline',
-                          marginBottom: '0.4rem',
-                        }}
-                      >
-                        <label style={{ color: '#c4b5fd', fontSize: '0.82rem', fontWeight: 500 }}>
-                          Select top-K candidates
-                        </label>
-                        <span
-                          style={{
-                            color: '#fff',
-                            fontWeight: 700,
-                            fontSize: '0.95rem',
-                            minWidth: '36px',
-                            textAlign: 'right',
-                          }}
-                        >
-                          {treeTopK}
-                        </span>
-                      </div>
-                      <input
-                        id="treeTopK-slider"
-                        type="range"
-                        min={10}
-                        max={2000}
-                        step={10}
-                        value={treeTopK}
-                        onChange={(e) => setTreeTopK(parseInt(e.target.value))}
-                        style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }}
-                      />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', background: 'rgba(139, 92, 246, 0.07)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>Select top-K candidates</label>
+                      <span style={{ color: '#fff', fontWeight: 700 }}>{treeTopK}</span>
                     </div>
+                    <input type="range" min={10} max={2000} step={10} value={treeTopK} onChange={(e) => setTreeTopK(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }} />
                   </div>
                 </div>
               )}
 
-              {/* ── Advanced Pipeline Toggle ─────────────────────────────── */}
               {screeningEngine === 'llm' && (
-                <div
-                  className="input-group"
-                  style={{
-                    borderTop: '1px solid rgba(255,255,255,0.08)',
-                    paddingTop: '1.2rem',
-                    marginTop: '0.5rem',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      marginBottom: '0.5rem',
-                    }}
-                  >
-                    <label
-                      style={{
-                        color: '#f1f5f9',
-                        fontWeight: 600,
-                        fontSize: '0.95rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                      }}
-                    >
+                <div className="input-group" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.2rem', marginTop: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <label style={{ color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <span>🚀</span> Advanced Pipeline
                     </label>
-                    <button
-                      type="button"
-                      id="pipeline-toggle"
-                      onClick={() => setUsePipeline((p) => !p)}
-                      aria-pressed={usePipeline}
-                      style={{
-                        width: '52px',
-                        height: '28px',
-                        borderRadius: '14px',
-                        border: 'none',
-                        background: usePipeline
-                          ? 'linear-gradient(135deg, #8b5cf6, #ec4899)'
-                          : 'rgba(255,255,255,0.12)',
-                        cursor: 'pointer',
-                        position: 'relative',
-                        transition: 'background 0.25s',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          top: '4px',
-                          left: usePipeline ? '26px' : '4px',
-                          width: '20px',
-                          height: '20px',
-                          borderRadius: '50%',
-                          background: '#fff',
-                          transition: 'left 0.25s',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
-                        }}
-                      />
+                    <button type="button" onClick={() => setUsePipeline((p) => !p)} aria-pressed={usePipeline} style={{ width: '52px', height: '28px', borderRadius: '14px', border: 'none', background: usePipeline ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'var(--surface-input)', cursor: 'pointer', position: 'relative' }}>
+                      <span style={{ position: 'absolute', top: '4px', left: usePipeline ? '26px' : '4px', width: '20px', height: '20px', borderRadius: '50%', background: '#fff', transition: 'left 0.25s' }} />
                     </button>
                   </div>
-                  <span
-                    style={{
-                      color: '#94a3b8',
-                      fontSize: '0.8rem',
-                      lineHeight: 1.5,
-                      display: 'block',
-                      marginBottom: usePipeline ? '1rem' : 0,
-                    }}
-                  >
-                    Hybrid search + semantic reranking + deterministic LLM audit. Faster &amp; more
-                    precise — replaces standard screening when ON.
-                  </span>
-
                   {usePipeline && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '1.2rem',
-                        background: 'rgba(139, 92, 246, 0.07)',
-                        borderRadius: '0.75rem',
-                        padding: '1rem 1.2rem',
-                        border: '1px solid rgba(139, 92, 246, 0.2)',
-                      }}
-                    >
-                      {/* top-N slider */}
-                      <div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'baseline',
-                            marginBottom: '0.4rem',
-                          }}
-                        >
-                          <label style={{ color: '#c4b5fd', fontSize: '0.82rem', fontWeight: 500 }}>
-                            Retrieve top-N from search
-                          </label>
-                          <span
-                            style={{
-                              color: '#fff',
-                              fontWeight: 700,
-                              fontSize: '0.95rem',
-                              minWidth: '36px',
-                              textAlign: 'right',
-                            }}
-                          >
-                            {pipelineTopN}
-                          </span>
-                        </div>
-                        <input
-                          id="topN-slider"
-                          type="range"
-                          min={50}
-                          max={1000}
-                          step={25}
-                          value={pipelineTopN}
-                          onChange={(e) => setPipelineTopN(parseInt(e.target.value))}
-                          style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }}
-                        />
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            color: '#475569',
-                            fontSize: '0.72rem',
-                            marginTop: '2px',
-                          }}
-                        >
-                          <span>50</span>
-                          <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
-                            Stage 2 — hybrid search pool (Meilisearch + pgvector)
-                          </span>
-                          <span>1000</span>
-                        </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', background: 'rgba(139, 92, 246, 0.07)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>Retrieve top-N</label>
+                        <span style={{ color: '#fff', fontWeight: 700 }}>{pipelineTopN}</span>
                       </div>
+                      <input type="range" min={50} max={1000} step={25} value={pipelineTopN} onChange={(e) => setPipelineTopN(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }} />
 
-                      {/* top-K slider */}
-                      <div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'baseline',
-                            marginBottom: '0.4rem',
-                          }}
-                        >
-                          <label style={{ color: '#f9a8d4', fontSize: '0.82rem', fontWeight: 500 }}>
-                            Rerank to top-K for LLM audit
-                          </label>
-                          <span
-                            style={{
-                              color: '#fff',
-                              fontWeight: 700,
-                              fontSize: '0.95rem',
-                              minWidth: '36px',
-                              textAlign: 'right',
-                            }}
-                          >
-                            {pipelineTopK}
-                          </span>
-                        </div>
-                        <input
-                          id="topK-slider"
-                          type="range"
-                          min={10}
-                          max={500}
-                          step={10}
-                          value={pipelineTopK}
-                          onChange={(e) => setPipelineTopK(parseInt(e.target.value))}
-                          style={{ width: '100%', accentColor: '#ec4899', cursor: 'pointer' }}
-                        />
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            color: '#475569',
-                            fontSize: '0.72rem',
-                            marginTop: '2px',
-                          }}
-                        >
-                          <span>10</span>
-                          <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
-                            Stage 3 → Stage 4 — reranked shortlist sent to LLM
-                          </span>
-                          <span>500</span>
-                        </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <label style={{ color: '#f9a8d4', fontSize: '0.82rem' }}>Rerank to top-K</label>
+                        <span style={{ color: '#fff', fontWeight: 700 }}>{pipelineTopK}</span>
                       </div>
-
-                      {/* experience overrides */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: '1rem',
-                          borderTop: '1px solid rgba(139,92,246,0.15)',
-                          paddingTop: '1rem',
-                        }}
-                      >
+                      <input type="range" min={10} max={500} step={10} value={pipelineTopK} onChange={(e) => setPipelineTopK(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#ec4899', cursor: 'pointer' }} />
+                      
+                      <div style={{ display: 'flex', gap: '1rem', borderTop: '1px solid rgba(139,92,246,0.15)', paddingTop: '1rem' }}>
                         <div style={{ flex: 1 }}>
-                          <label
-                            style={{
-                              color: '#c4b5fd',
-                              fontSize: '0.82rem',
-                              fontWeight: 500,
-                              display: 'block',
-                              marginBottom: '0.4rem',
-                            }}
-                          >
+                          <label style={{ color: '#c4b5fd', fontSize: '0.82rem', fontWeight: 500, display: 'block', marginBottom: '0.4rem' }}>
                             Min Experience (Years)
                           </label>
-                          <input
-                            type="number"
-                            value={pipelineMinExp}
-                            onChange={(e) =>
-                              setPipelineMinExp(
-                                e.target.value === '' ? '' : parseInt(e.target.value),
-                              )
-                            }
-                            min={0}
-                            max={50}
-                            placeholder="Auto extract"
-                            style={{
-                              width: '100%',
-                              padding: '0.6rem',
-                              borderRadius: '0.5rem',
-                              background: 'rgba(15, 23, 42, 0.4)',
-                              border: '1px solid rgba(139,92,246,0.3)',
-                              color: '#fff',
-                              boxSizing: 'border-box',
-                              outline: 'none',
-                              fontSize: '0.85rem',
-                            }}
-                          />
+                          <input type="number" value={pipelineMinExp} onChange={(e) => setPipelineMinExp(e.target.value === '' ? '' : parseInt(e.target.value))} min={0} max={50} placeholder="Auto extract" style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', border: '1px solid rgba(139,92,246,0.3)', color: '#fff', boxSizing: 'border-box', outline: 'none', fontSize: '0.85rem' }} />
                         </div>
                         <div style={{ flex: 1 }}>
-                          <label
-                            style={{
-                              color: '#f9a8d4',
-                              fontSize: '0.82rem',
-                              fontWeight: 500,
-                              display: 'block',
-                              marginBottom: '0.4rem',
-                            }}
-                          >
+                          <label style={{ color: '#f9a8d4', fontSize: '0.82rem', fontWeight: 500, display: 'block', marginBottom: '0.4rem' }}>
                             Max Experience (Years)
                           </label>
-                          <input
-                            type="number"
-                            value={pipelineMaxExp}
-                            onChange={(e) =>
-                              setPipelineMaxExp(
-                                e.target.value === '' ? '' : parseInt(e.target.value),
-                              )
-                            }
-                            min={0}
-                            max={50}
-                            placeholder="Auto extract"
-                            style={{
-                              width: '100%',
-                              padding: '0.6rem',
-                              borderRadius: '0.5rem',
-                              background: 'rgba(15, 23, 42, 0.4)',
-                              border: '1px solid rgba(139,92,246,0.3)',
-                              color: '#fff',
-                              boxSizing: 'border-box',
-                              outline: 'none',
-                              fontSize: '0.85rem',
-                            }}
-                          />
+                          <input type="number" value={pipelineMaxExp} onChange={(e) => setPipelineMaxExp(e.target.value === '' ? '' : parseInt(e.target.value))} min={0} max={50} placeholder="Auto extract" style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', border: '1px solid rgba(139,92,246,0.3)', color: '#fff', boxSizing: 'border-box', outline: 'none', fontSize: '0.85rem' }} />
                         </div>
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#64748b',
-                          borderTop: '1px solid rgba(139,92,246,0.15)',
-                          paddingTop: '0.75rem',
-                        }}
-                      >
-                        ⚡ Pipeline: {pipelineTopN} candidates → reranked → {pipelineTopK} → LLM
-                        audit → results sorted by attrition hazard
                       </div>
                     </div>
                   )}
                 </div>
               )}
-              {/* ── End Advanced Pipeline ─────────────────────────────────── */}
-
-              {outreachStatus && (
-                <div
-                  style={{
-                    padding: '1rem',
-                    background:
-                      outreachStatus.includes('success') ||
-                      outreachStatus.includes('Batch Accepted')
-                        ? 'rgba(16, 185, 129, 0.2)'
-                        : 'rgba(239, 68, 68, 0.2)',
-                    color:
-                      outreachStatus.includes('success') ||
-                      outreachStatus.includes('Batch Accepted')
-                        ? '#6ee7b7'
-                        : '#fca5a5',
-                    borderRadius: '0.5rem',
-                    marginTop: '1rem',
-                    fontSize: '0.9rem',
-                  }}
-                >
-                  {outreachStatus}
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                padding: '1.5rem',
-                background: 'rgba(15, 23, 42, 0.3)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: '1rem',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setIsOutreachModalOpen(false)}
-                style={{
-                  padding: '0.75rem 1.5rem',
-                  background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '0.5rem',
-                  color: '#f1f5f9',
-                  cursor: 'pointer',
-                  fontWeight: 500,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleOutreachSubmit}
-                disabled={
-                  isSubmitting ||
-                  !outreachJd.trim() ||
-                  !outreachEmail.trim() ||
-                  !jobName.trim() ||
-                  !companyName.trim()
-                }
-                style={{
-                  background:
-                    isSubmitting ||
-                    !outreachJd.trim() ||
-                    !outreachEmail.trim() ||
-                    !jobName.trim() ||
-                    !companyName.trim()
-                      ? 'rgba(255, 255, 255, 0.1)'
-                      : 'linear-gradient(135deg, #8b5cf6, #ec4899)',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '0.5rem',
-                  fontWeight: 600,
-                  border: 'none',
-                  color:
-                    isSubmitting ||
-                    !outreachJd.trim() ||
-                    !outreachEmail.trim() ||
-                    !jobName.trim() ||
-                    !companyName.trim()
-                      ? '#64748b'
-                      : '#fff',
-                  cursor:
-                    isSubmitting ||
-                    !outreachJd.trim() ||
-                    !outreachEmail.trim() ||
-                    !jobName.trim() ||
-                    !companyName.trim()
-                      ? 'not-allowed'
-                      : 'pointer',
-                  opacity: isSubmitting ? 0.7 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                }}
-              >
-                {isSubmitting ? <Loader2 className="spin" size={16} /> : null}
-                {isSubmitting ? 'Dispatching...' : 'Start AI Screening'}
-              </button>
-            </div>
+            </OutreachForm>
           </Modal>
         )}
       </AnimatePresence>

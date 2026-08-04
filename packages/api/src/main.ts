@@ -30,18 +30,15 @@ app.use(
 );
 
 // ── Health probes — before auth so orchestrators can reach them ─────────────
-app.get('/healthz', (_req, res) => {
-    res.status(200).json({ status: 'ok' });
-});
-
+app.get('/healthz', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/readyz', async (_req, res) => {
-    try {
-        await pool.query('SELECT 1');
-        res.status(200).json({ status: 'ready' });
-    } catch (err) {
-        logError('readiness_check_failed', err);
-        res.status(503).json({ status: 'not-ready' });
-    }
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).json({ status: 'ready' });
+  } catch (err) {
+    logError('readiness_failed', err as Error);
+    res.status(503).json({ status: 'not-ready' });
+  }
 });
 
 // ── Request logging ─────────────────────────────────────────────────────────

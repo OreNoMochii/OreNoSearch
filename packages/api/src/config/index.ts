@@ -58,6 +58,7 @@ const ConfigSchema = z
         // ── Downstream services (were hardcoded localhost literals) ────────
         RETRIEVAL_SERVICE_URL: z.string().url().default('http://localhost:8765'),
         ML_SCORING_URL: z.string().url().default('http://localhost:8000'),
+        REDIS_URL: z.string().url().default('redis://127.0.0.1:6379'),
         RETRIEVAL_TIMEOUT_MS: z.coerce.number().int().default(300_000),
         PYTHON_TIMEOUT_MS: z.coerce.number().int().default(900_000),
 

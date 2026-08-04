@@ -42,6 +42,15 @@ services:
       - meilisearch_data:/meili_data
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    container_name: metaview_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pgadmin4_container
@@ -58,3 +67,4 @@ volumes:
   postgres_data:
   pgvector_data:
   meilisearch_data:
+  redis_data:
