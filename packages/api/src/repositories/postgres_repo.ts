@@ -558,11 +558,9 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
 }
 
 let cachedLocations: string[] | null = null;
-let lastCacheUpdate: number = 0;
-const CACHE_TTL = 1000 * 60 * 60 * 24; // 24 hours
 
 export async function getAvailableLocations(): Promise<string[]> {
-    if (cachedLocations && Date.now() - lastCacheUpdate < CACHE_TTL) {
+    if (cachedLocations) {
         return cachedLocations;
     }
 
@@ -610,7 +608,6 @@ export async function getAvailableLocations(): Promise<string[]> {
         `;
         const res = await client.query(query);
         cachedLocations = res.rows.map((r) => r.display_location).sort();
-        lastCacheUpdate = Date.now();
         return cachedLocations;
     } finally {
         client.release();
