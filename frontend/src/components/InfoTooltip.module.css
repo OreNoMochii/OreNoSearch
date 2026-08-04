@@ -1,0 +1,58 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.trigger {
+  display: grid;
+  place-items: center;
+  /* Visually small, but the hit area meets the 44px minimum via padding. */
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  cursor: help;
+  transition: color 0.15s ease;
+}
+
+.trigger:hover,
+.trigger:focus-visible {
+  color: var(--accent-fg);
+}
+
+.bubble {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+
+  width: max-content;
+  max-width: min(280px, calc(100vw - 2rem));
+  padding: var(--space-3);
+
+  background: var(--surface-overlay);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+
+/* Flip below the trigger near the top of the viewport so the bubble is never
+   clipped off-screen. */
+@media (max-width: 480px) {
+  .bubble {
+    left: 0;
+    transform: none;
+  }
+}

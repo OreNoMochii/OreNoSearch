@@ -107,7 +107,7 @@ class RankCounter {
 
 function parseExperienceYears(expStr?: string): number {
   if (!expStr) return 0;
-  
+
   const text = expStr.toLowerCase();
   let totalYears = 0;
 
@@ -126,7 +126,6 @@ function parseExperienceYears(expStr?: string): number {
   return totalYears;
 }
 
-
 async function searchTerm(
   term: string,
   perTermLimit: number,
@@ -134,47 +133,47 @@ async function searchTerm(
   docRank: DocRank,
   ranker: RankCounter,
   filter?: string,
-  indexes = ['profiles', 'candidates']
+  indexes = ['profiles', 'candidates'],
 ): Promise<Set<string>> {
   const ids = new Set<string>();
   const PAGE_SIZE = 1000;
 
   for (const indexName of indexes) {
-      try {
-        let offset = 0;
-        let totalFetched = 0;
+    try {
+      let offset = 0;
+      let totalFetched = 0;
 
-        while (totalFetched < perTermLimit) {
-            const limit = Math.min(PAGE_SIZE, perTermLimit - totalFetched);
-            const response = await meiliProxy<SearchHit>({
-              index: indexName,
-              query: `("${term}")`,
-              limit,
-              offset,
-              filter,
-            });
+      while (totalFetched < perTermLimit) {
+        const limit = Math.min(PAGE_SIZE, perTermLimit - totalFetched);
+        const response = await meiliProxy<SearchHit>({
+          index: indexName,
+          query: `("${term}")`,
+          limit,
+          offset,
+          filter,
+        });
 
-            const hits = response.hits || [];
-            if (hits.length === 0) break;
+        const hits = response.hits || [];
+        if (hits.length === 0) break;
 
-            for (const hit of hits) {
-              const hitId = hit.id || hit.profile_url;
-              if (!hitId) continue;
+        for (const hit of hits) {
+          const hitId = hit.id || hit.profile_url;
+          if (!hitId) continue;
 
-              ids.add(hitId);
-              if (!docStore[hitId]) {
-                docStore[hitId] = hit;
-                docRank[hitId] = ranker.take();   // O(1), was O(n)
-              }
-            }
-
-            offset += hits.length;
-            totalFetched += hits.length;
-            if (hits.length < limit) break; // Reached the end of available hits
+          ids.add(hitId);
+          if (!docStore[hitId]) {
+            docStore[hitId] = hit;
+            docRank[hitId] = ranker.take(); // O(1), was O(n)
+          }
         }
-      } catch (err) {
-        console.warn(`Index ${indexName} failed for term [${term}]`, err);
+
+        offset += hits.length;
+        totalFetched += hits.length;
+        if (hits.length < limit) break; // Reached the end of available hits
       }
+    } catch (err) {
+      console.warn(`Index ${indexName} failed for term [${term}]`, err);
+    }
   }
   return ids;
 }
@@ -185,11 +184,11 @@ async function gatherTermSets(
   docStore: DocStore,
   docRank: DocRank,
   ranker: RankCounter,
-  filter?: string
+  filter?: string,
 ): Promise<Set<string>[]> {
-  const cleaned = terms.map(t => t.trim()).filter(t => t);
-  const promises = cleaned.map(term =>
-    searchTerm(term, perTermLimit, docStore, docRank, ranker, filter)
+  const cleaned = terms.map((t) => t.trim()).filter((t) => t);
+  const promises = cleaned.map((term) =>
+    searchTerm(term, perTermLimit, docStore, docRank, ranker, filter),
   );
   return Promise.all(promises);
 }
@@ -197,7 +196,7 @@ async function gatherTermSets(
 function combineSets(
   shouldSets: Set<string>[],
   mustSets: Set<string>[],
-  mustNotSets: Set<string>[]
+  mustNotSets: Set<string>[],
 ): Set<string> {
   let working: Set<string> | null = null;
 
@@ -224,7 +223,7 @@ function combineSets(
       // Intersect: only keep items present in 's'
       const nextWorking = new Set<string>();
       for (const item of Array.from(working)) {
-         if (s.has(item)) nextWorking.add(item);
+        if (s.has(item)) nextWorking.add(item);
       }
       working = nextWorking;
     }
@@ -266,198 +265,209 @@ export interface SearchQuery {
   locationKeywords?: string[];
 }
 
-export async function runBooleanSearch(query: SearchQuery): Promise<{ hits: BooleanHit[], total: number, uniqueLocations: string[] }> {
-    const shouldTerms = query.should || [];
-    let mustTerms = query.must || [];
-    const mustNotTerms = query.mustNot || [];
-    const andGroups = query.andGroups || [];
-    const limit = query.limit || 25;
-    const perTermLimit = query.perTermLimit || 5000;
+export async function runBooleanSearch(
+  query: SearchQuery,
+): Promise<{ hits: BooleanHit[]; total: number; uniqueLocations: string[] }> {
+  const shouldTerms = query.should || [];
+  const mustTerms = query.must || [];
+  const mustNotTerms = query.mustNot || [];
+  const andGroups = query.andGroups || [];
+  const limit = query.limit || 25;
+  const perTermLimit = query.perTermLimit || 5000;
 
-    const docStore: DocStore = {};
-    const docRank: DocRank = {};
-    const ranker = new RankCounter();
+  const docStore: DocStore = {};
+  const docRank: DocRank = {};
+  const ranker = new RankCounter();
 
-    // Build Meilisearch filter (only numeric/exact filters go here)
-    const filterParts: string[] = [];
-    if (query.minMonthsInCurrentRole) {
-      filterParts.push(`months_in_current_role >= ${query.minMonthsInCurrentRole}`);
+  // Build Meilisearch filter (only numeric/exact filters go here)
+  const filterParts: string[] = [];
+  if (query.minMonthsInCurrentRole) {
+    filterParts.push(`months_in_current_role >= ${query.minMonthsInCurrentRole}`);
+  }
+  // Location filtering is handled as post-search filtering (partial/contains match)
+  // since locations are now region-level (e.g. "Tokyo") but documents have full strings
+  // like "Minato-ku, Tokyo, Japan"
+  // Note: excludeCompanies is handled as post-search filtering (starts-with match)
+  const meiliFilter = filterParts.length > 0 ? filterParts.join(' AND ') : undefined;
+
+  const [shouldSets, extractedMustSets, mustNotSets, groupResults] = await Promise.all([
+    gatherTermSets(shouldTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+    gatherTermSets(mustTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+    gatherTermSets(mustNotTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
+    Promise.all(
+      andGroups.map((group) =>
+        gatherTermSets(group, perTermLimit, docStore, docRank, ranker, meiliFilter),
+      ),
+    ),
+  ]);
+
+  const mustSets = [...extractedMustSets];
+
+  if (andGroups.length > 0) {
+    for (const groupSets of groupResults) {
+      const unionSet = new Set<string>();
+      for (const s of groupSets) {
+        for (const item of Array.from(s)) unionSet.add(item);
+      }
+      // Always push the unionSet, even if empty, so an empty AND group correctly zeroes the results.
+      mustSets.push(unionSet);
     }
-    // Location filtering is handled as post-search filtering (partial/contains match)
-    // since locations are now region-level (e.g. "Tokyo") but documents have full strings
-    // like "Minato-ku, Tokyo, Japan"
-    // Note: excludeCompanies is handled as post-search filtering (starts-with match)
-    const meiliFilter = filterParts.length > 0 ? filterParts.join(' AND ') : undefined;
+  }
 
-    const [shouldSets, extractedMustSets, mustNotSets, groupResults] = await Promise.all([
-        gatherTermSets(shouldTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
-        gatherTermSets(mustTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
-        gatherTermSets(mustNotTerms, perTermLimit, docStore, docRank, ranker, meiliFilter),
-        Promise.all(andGroups.map(group => gatherTermSets(group, perTermLimit, docStore, docRank, ranker, meiliFilter)))
-    ]);
+  if (shouldTerms.length === 0 && mustTerms.length === 0 && andGroups.length === 0) {
+    // If there are absolutely no keywords provided, we just want to fetch based on location/filters
+    const allSet = await searchTerm('', perTermLimit, docStore, docRank, ranker, meiliFilter);
+    shouldSets.push(allSet);
+  }
+  if (shouldSets.length === 0 && mustSets.length === 0) {
+    // If the user provided terms but Meilisearch found exactly 0 documents for all of them,
+    // it means there are no matches. We should return 0 hits cleanly instead of erroring out.
+    return { hits: [], total: 0, uniqueLocations: [] };
+  }
 
-    const mustSets = [...extractedMustSets];
+  const matchingIds = combineSets(shouldSets, mustSets, mustNotSets);
+  const orderedIds = Array.from(matchingIds).sort((a, b) => {
+    const r1 = docRank[a] !== undefined ? docRank[a] : Number.POSITIVE_INFINITY;
+    const r2 = docRank[b] !== undefined ? docRank[b] : Number.POSITIVE_INFINITY;
+    return r1 - r2;
+  });
 
-    if (andGroups.length > 0) {
-        for (const groupSets of groupResults) {
-            const unionSet = new Set<string>();
-            for (const s of groupSets) {
-                for (const item of Array.from(s)) unionSet.add(item);
-            }
-            // Always push the unionSet, even if empty, so an empty AND group correctly zeroes the results.
-            mustSets.push(unionSet);
-        }
-    }
+  let filteredIds = orderedIds;
 
-    if (shouldTerms.length === 0 && mustTerms.length === 0 && andGroups.length === 0) {
-        // If there are absolutely no keywords provided, we just want to fetch based on location/filters
-        const allSet = await searchTerm("", perTermLimit, docStore, docRank, ranker, meiliFilter);
-        shouldSets.push(allSet);
-    }
-    if (shouldSets.length === 0 && mustSets.length === 0) {
-        // If the user provided terms but Meilisearch found exactly 0 documents for all of them,
-        // it means there are no matches. We should return 0 hits cleanly instead of erroring out.
-        return { hits: [], total: 0, uniqueLocations: [] };
-    }
-
-    const matchingIds = combineSets(shouldSets, mustSets, mustNotSets);
-    const orderedIds = Array.from(matchingIds).sort((a, b) => {
-        const r1 = docRank[a] !== undefined ? docRank[a] : Number.POSITIVE_INFINITY;
-        const r2 = docRank[b] !== undefined ? docRank[b] : Number.POSITIVE_INFINITY;
-        return r1 - r2;
+  // Post-search filter: exclude candidates whose current_company starts with any excluded company name
+  if (query.excludeCompanies && query.excludeCompanies.length > 0) {
+    const excludeLower = query.excludeCompanies.map((c) => c.toLowerCase());
+    filteredIds = filteredIds.filter((hitId) => {
+      const doc = docStore[hitId];
+      if (!doc || !doc.current_company) return true; // keep if no company info
+      const company = doc.current_company.toLowerCase();
+      return !excludeLower.some((exc) => company.startsWith(exc));
     });
+  }
 
-    let filteredIds = orderedIds;
+  if (query.minExp !== undefined || query.maxExp !== undefined) {
+    filteredIds = filteredIds.filter((hitId) => {
+      const doc = docStore[hitId];
+      if (!doc) return false;
 
-    // Post-search filter: exclude candidates whose current_company starts with any excluded company name
-    if (query.excludeCompanies && query.excludeCompanies.length > 0) {
-        const excludeLower = query.excludeCompanies.map(c => c.toLowerCase());
-        filteredIds = filteredIds.filter(hitId => {
-            const doc = docStore[hitId];
-            if (!doc || !doc.current_company) return true; // keep if no company info
-            const company = doc.current_company.toLowerCase();
-            return !excludeLower.some(exc => company.startsWith(exc));
-        });
-    }
+      const expYears = parseExperienceYears(doc.experience);
+      if (query.minExp !== undefined && expYears < query.minExp) return false;
+      if (query.maxExp !== undefined && expYears > query.maxExp) return false;
 
-    if (query.minExp !== undefined || query.maxExp !== undefined) {
-        filteredIds = filteredIds.filter(hitId => {
-            const doc = docStore[hitId];
-            if (!doc) return false;
-            
-            const expYears = parseExperienceYears(doc.experience);
-            if (query.minExp !== undefined && expYears < query.minExp) return false;
-            if (query.maxExp !== undefined && expYears > query.maxExp) return false;
-            
-            return true;
-        });
-    }
+      return true;
+    });
+  }
 
-    if (query.currentRoleKeywords && query.currentRoleKeywords.length > 0) {
-        const keywordsLower = query.currentRoleKeywords.map(k => k.toLowerCase());
-        filteredIds = filteredIds.filter(hitId => {
-            const doc = docStore[hitId];
-            if (!doc || !doc.latest_role) return false;
-            const latestRole = doc.latest_role.toLowerCase();
-            return keywordsLower.some(kw => latestRole.includes(kw));
-        });
-    }
+  if (query.currentRoleKeywords && query.currentRoleKeywords.length > 0) {
+    const keywordsLower = query.currentRoleKeywords.map((k) => k.toLowerCase());
+    filteredIds = filteredIds.filter((hitId) => {
+      const doc = docStore[hitId];
+      if (!doc || !doc.latest_role) return false;
+      const latestRole = doc.latest_role.toLowerCase();
+      return keywordsLower.some((kw) => latestRole.includes(kw));
+    });
+  }
 
-    // Post-search filter: location contains matching (region-level)
-    if (query.locationKeywords && query.locationKeywords.length > 0) {
-        const locLower = query.locationKeywords.map(l => l.toLowerCase());
-        filteredIds = filteredIds.filter(hitId => {
-            const doc = docStore[hitId];
-            if (!doc || !doc.location) return false;
-            const docLoc = doc.location.toLowerCase();
-            return locLower.some(loc => docLoc.includes(loc));
-        });
-    }
+  // Post-search filter: location contains matching (region-level)
+  if (query.locationKeywords && query.locationKeywords.length > 0) {
+    const locLower = query.locationKeywords.map((l) => l.toLowerCase());
+    filteredIds = filteredIds.filter((hitId) => {
+      const doc = docStore[hitId];
+      if (!doc || !doc.location) return false;
+      const docLoc = doc.location.toLowerCase();
+      return locLower.some((loc) => docLoc.includes(loc));
+    });
+  }
 
-    // Capture unique locations BEFORE slicing
-    const uniqueLocations = Array.from(new Set(filteredIds.map(hitId => docStore[hitId]?.location).filter(Boolean))).sort() as string[];
+  // Capture unique locations BEFORE slicing
+  const uniqueLocations = Array.from(
+    new Set(filteredIds.map((hitId) => docStore[hitId]?.location).filter(Boolean)),
+  ).sort() as string[];
 
-    const limitedIds = filteredIds.slice(0, limit);
-    const finalHits: BooleanHit[] = [];
+  const limitedIds = filteredIds.slice(0, limit);
+  const finalHits: BooleanHit[] = [];
 
-    for (const hitId of limitedIds) {
-        const doc = docStore[hitId];
-        if (!doc) continue;
+  for (const hitId of limitedIds) {
+    const doc = docStore[hitId];
+    if (!doc) continue;
 
-        finalHits.push({
-            folder_id: hitId,
-            full_name: doc.name || hitId,
-            resume_drive_view_url: doc.profile_url || '',
-            candidate_summary: doc.summary || 'No summary available',
-            ai_latest_role: doc.latest_role || 'Unknown Role',
-            ai_latest_company: doc.current_company || 'Unknown Company',
-            ai_latest_location: doc.location || 'Unknown Location',
-            resume_text_excerpt: doc.experience || 'No experience available',
-            education: doc.education || ''
-        });
-    }
+    finalHits.push({
+      folder_id: hitId,
+      full_name: doc.name || hitId,
+      resume_drive_view_url: doc.profile_url || '',
+      candidate_summary: doc.summary || 'No summary available',
+      ai_latest_role: doc.latest_role || 'Unknown Role',
+      ai_latest_company: doc.current_company || 'Unknown Company',
+      ai_latest_location: doc.location || 'Unknown Location',
+      resume_text_excerpt: doc.experience || 'No experience available',
+      education: doc.education || '',
+    });
+  }
 
-    return {
-        hits: finalHits,
-        total: filteredIds.length,
-        uniqueLocations: uniqueLocations
-    };
+  return {
+    hits: finalHits,
+    total: filteredIds.length,
+    uniqueLocations: uniqueLocations,
+  };
 }
 
 export async function getAvailableLocations(): Promise<string[]> {
-    try {
-        const API_BASE_URL = ''; // Relative to origin
-        const res = await fetch(`${API_BASE_URL}/api/locations`, {
-            credentials: 'include'
-        });
-        if (!res.ok) throw new Error("Failed to fetch locations");
-        const data = await res.json();
-        return data.locations || [];
-    } catch (e) {
-        console.warn(`Could not fetch locations from backend`, e);
-        return [];
-    }
-}
-
-export async function runSqlBooleanSearch(query: SearchQuery): Promise<{ hits: BooleanHit[], total: number, uniqueLocations: string[] }> {
-    const API_BASE_URL = ''; // using relative path for now
-    
-    const payload = {
-        should: query.should,
-        must: query.must,
-        mustNot: query.mustNot,
-        andGroups: query.andGroups,
-        locations: query.locationKeywords || [],
-        limit: query.limit,
-        minExp: query.minExp,
-        maxExp: query.maxExp,
-        excludeCompanies: query.excludeCompanies,
-        currentRoleKeywords: query.currentRoleKeywords
-    };
-
-    const response = await fetch(`${API_BASE_URL}/api/search`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload)
+  try {
+    const API_BASE_URL = ''; // Relative to origin
+    const res = await fetch(`${API_BASE_URL}/api/locations`, {
+      credentials: 'include',
     });
-
-    if (!response.ok) {
-        let errStr = "Failed to run SQL search";
-        try {
-            const errJson = await response.json();
-            errStr = errJson.error || errStr;
-        } catch(e) {}
-        throw new Error(errStr);
-    }
-
-    const data = await response.json();
-    return {
-        hits: data.hits,
-        total: data.total,
-        uniqueLocations: query.locationKeywords || []
-    };
+    if (!res.ok) throw new Error('Failed to fetch locations');
+    const data = await res.json();
+    return data.locations || [];
+  } catch (e) {
+    console.warn(`Could not fetch locations from backend`, e);
+    return [];
+  }
 }
 
+export async function runSqlBooleanSearch(
+  query: SearchQuery,
+): Promise<{ hits: BooleanHit[]; total: number; uniqueLocations: string[] }> {
+  const API_BASE_URL = ''; // using relative path for now
+
+  const payload = {
+    should: query.should,
+    must: query.must,
+    mustNot: query.mustNot,
+    andGroups: query.andGroups,
+    locations: query.locationKeywords || [],
+    limit: query.limit,
+    minExp: query.minExp,
+    maxExp: query.maxExp,
+    excludeCompanies: query.excludeCompanies,
+    currentRoleKeywords: query.currentRoleKeywords,
+  };
+
+  const response = await fetch(`${API_BASE_URL}/api/search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    let errStr = 'Failed to run SQL search';
+    try {
+      const errJson = await response.json();
+      errStr = errJson.error || errStr;
+    } catch {
+      // Response body was not JSON; keep the generic message.
+    }
+    throw new Error(errStr);
+  }
+
+  const data = await response.json();
+  return {
+    hits: data.hits,
+    total: data.total,
+    uniqueLocations: query.locationKeywords || [],
+  };
+}

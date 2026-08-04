@@ -1,3 +1,4 @@
+@import './styles/tokens.css';
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
@@ -19,7 +20,11 @@
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    'Inter',
+    system-ui,
+    -apple-system,
+    sans-serif;
   background-color: var(--bg-color);
   background: radial-gradient(circle at top right, #1e1b4b, #030712 60%);
   color: var(--text-main);
@@ -27,13 +32,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3, h4, h5 {
+h1,
+h2,
+h3,
+h4,
+h5 {
   margin: 0;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
-input, textarea, button {
+input,
+textarea,
+button {
   font-family: inherit;
   color: inherit;
 }
@@ -96,7 +107,9 @@ input, textarea, button {
   margin-top: -0.25rem;
 }
 
-textarea, input[type="number"], input[type="text"] {
+textarea,
+input[type='number'],
+input[type='text'] {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   border-radius: 0.75rem;
@@ -106,7 +119,8 @@ textarea, input[type="number"], input[type="text"] {
   resize: vertical;
 }
 
-textarea:focus, input:focus {
+textarea:focus,
+input:focus {
   outline: none;
   border-color: var(--input-focus);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
@@ -114,8 +128,14 @@ textarea:focus, input:focus {
 
 /* Animations */
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-slide-up {
@@ -128,12 +148,12 @@ textarea:focus, input:focus {
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.2); 
+  background: rgba(0, 0, 0, 0.2);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1); 
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.2); 
+  background: rgba(255, 255, 255, 0.2);
 }

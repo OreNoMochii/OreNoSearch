@@ -1,0 +1,129 @@
+.panel {
+  position: fixed;
+  bottom: var(--space-8);
+  right: var(--space-8);
+  z-index: var(--z-toast);
+
+  min-width: 280px;
+  max-width: min(360px, calc(100vw - 2rem));
+  padding: var(--space-4);
+
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.icon {
+  color: var(--accent-fg);
+  flex-shrink: 0;
+}
+
+.heading {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.itemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.batchLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--success-fg);
+  font-weight: 500;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Native <progress> needs explicit styling per engine, but keeping the element
+   means the value is exposed to assistive technology for free. */
+.progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  appearance: none;
+  background: var(--border-subtle);
+}
+
+.progress::-webkit-progress-bar {
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+
+.progress::-webkit-progress-value {
+  background: var(--success-fg);
+  border-radius: var(--radius-full);
+  transition: inline-size 0.3s ease;
+}
+
+.progress::-moz-progress-bar {
+  background: var(--success-fg);
+  border-radius: var(--radius-full);
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  background: var(--surface-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Full-width strip at the bottom on small screens rather than a floating card
+   that covers the content. */
+@media (max-width: 640px) {
+  .panel {
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+    min-width: 0;
+    max-width: none;
+  }
+}

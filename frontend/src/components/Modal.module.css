@@ -1,0 +1,96 @@
+.dialog {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: 100vw;
+  max-height: 100vh;
+  color: var(--text-primary);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 0.7);
+  backdrop-filter: blur(5px);
+}
+
+.panel {
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  width: min(600px, calc(100vw - 2rem));
+  max-height: min(90vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.body {
+  padding: var(--space-6);
+  overflow-y: auto;
+  /* Prevents the page behind from scrolling once the modal hits its end. */
+  overscroll-behavior: contain;
+}
+
+.footer {
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+/* Full-screen on small viewports rather than a cramped floating card. */
+@media (max-width: 640px) {
+  .panel {
+    width: 100vw;
+    max-height: 100vh;
+    border-radius: 0;
+    border: 0;
+  }
+
+  .body {
+    padding: var(--space-4);
+  }
+
+  .header,
+  .footer {
+    padding-inline: var(--space-4);
+  }
+}

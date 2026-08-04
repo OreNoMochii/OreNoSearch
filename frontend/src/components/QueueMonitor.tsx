@@ -1,74 +1,67 @@
-
-import { motion } from 'framer-motion';
 import { Activity, Clock } from 'lucide-react';
+import type { QueueStatus } from '../hooks/useQueueStatus';
+import styles from './QueueMonitor.module.css';
 
-export interface QueueStatus {
-  activeCount: number;
-  maxConcurrent: number;
-  pendingCount: number;
-  activeBatches: { id: number; size: number; processed: number; owner: string }[];
-  queuedBatches: { id: number; size: number; owner: string }[];
+interface QueueMonitorProps {
+  status: QueueStatus | null;
 }
 
-export function QueueMonitor({ status }: { status: QueueStatus | null }) {
+/**
+ * Floating progress panel for in-flight screening batches.
+ *
+ * Accessibility notes:
+ *  - the region is labelled and announced politely, so a screen-reader user
+ *    learns that a batch finished without focus being stolen;
+ *  - progress uses a real <progress> element rather than a coloured div, so
+ *    the value is exposed to assistive technology;
+ *  - `owner` is an email address, so it is rendered as plain text and never
+ *    used to build a link.
+ */
+export function QueueMonitor({ status }: QueueMonitorProps) {
   if (!status || (status.activeCount === 0 && status.pendingCount === 0)) return null;
 
   return (
-    <motion.div
-      initial={{ y: 100, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      exit={{ y: 100, opacity: 0 }}
-      style={{
-        position: 'fixed',
-        bottom: '2rem',
-        right: '2rem',
-        zIndex: 900,
-        background: '#1e293b',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        borderRadius: '1rem',
-        padding: '1rem',
-        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
-        minWidth: '280px',
-        backdropFilter: 'blur(10px)'
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '0.5rem' }}>
-        <Activity size={18} className="text-blue-400" style={{ color: '#60a5fa' }} />
-        <span style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.9rem' }}>AI Screening Engine</span>
+    <section className={styles.panel} aria-labelledby="queue-monitor-heading" aria-live="polite">
+      <div className={styles.header}>
+        <Activity size={18} aria-hidden="true" className={styles.icon} />
+        <h2 id="queue-monitor-heading" className={styles.heading}>
+          AI screening engine
+        </h2>
       </div>
 
-      {status.activeBatches.map(batch => (
-        <div key={batch.id} style={{ marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.4rem' }}>
-            <span style={{ color: '#6ee7b7' }}>● Batch #{batch.id} ({batch.owner})</span>
-            <span>{batch.processed || 0} / {batch.size}</span>
-          </div>
-          <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${(batch.processed / batch.size) * 100}%` }}
-              transition={{ duration: 0.5 }}
-              style={{ height: '100%', background: '#10b981' }}
-            />
-          </div>
-        </div>
-      ))}
-
-      {status.pendingCount > 0 && (
-        <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(15, 23, 42, 0.4)', borderRadius: '0.5rem', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }}>
-            <Clock size={14} />
-            <span>{status.pendingCount} Batch{status.pendingCount > 1 ? 'es' : ''} in Queue</span>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '0.5rem' }}>
-            {status.queuedBatches.map(b => (
-              <div key={b.id} style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '10px', color: '#cbd5e1', border: '1px solid rgba(255,255,255,0.05)' }}>
-                #{b.id} ({b.owner})
+      <ul className={styles.list}>
+        {status.activeBatches.map((batch) => {
+          const pct = batch.size > 0 ? Math.round((batch.processed / batch.size) * 100) : 0;
+          return (
+            <li key={batch.id} className={styles.item}>
+              <div className={styles.itemHeader}>
+                <span className={styles.batchLabel}>
+                  <span className={styles.dot} aria-hidden="true" />
+                  Batch #{batch.id}
+                </span>
+                <span className={styles.count}>
+                  {batch.processed} / {batch.size}
+                </span>
               </div>
-            ))}
-          </div>
+              <progress
+                className={styles.progress}
+                value={batch.processed}
+                max={Math.max(batch.size, 1)}
+                aria-label={`Batch ${batch.id}: ${pct}% complete`}
+              />
+            </li>
+          );
+        })}
+      </ul>
+
+      {status.pendingCount > 0 ? (
+        <div className={styles.pending}>
+          <Clock size={14} aria-hidden="true" />
+          <span>
+            {status.pendingCount} batch{status.pendingCount === 1 ? '' : 'es'} queued
+          </span>
         </div>
-      )}
-    </motion.div>
+      ) : null}
+    </section>
   );
 }
