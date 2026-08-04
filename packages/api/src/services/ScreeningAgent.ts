@@ -1,6 +1,6 @@
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { getClient, normaliseModelId } from '../core/llm_client';
-import { logInfo, logWarn, logError } from '../utils/logger';
+import { logInfo, logWarn } from '../utils/logger';
 import { VerificationMatch, VerificationResponse } from '../core/schemas';
 import { MinGapRateLimiter } from '../utils/rate_limiter';
 import path from 'path';
@@ -180,7 +180,11 @@ JSON
 
 CRITICAL: If data for a requirement is missing, set evidence_quote to "No evidence found" and score it appropriately. DO NOT omit any fields.`;
 
-        // ── Payload Trimming: strip irrelevant fields & truncate long text ──
+        // ── Payload trimming ────────────────────────────────────────────────
+        // These bindings exist only to remove the fields from screeningData.
+        // Stripping phone_number/email matters: without it, candidate PII is
+        // sent to a third-party LLM provider on every screening call.
+        /* eslint-disable @typescript-eslint/no-unused-vars */
         const {
             raw,
             phone_number,
@@ -191,6 +195,7 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
             _langScore,
             ...screeningData
         } = candidate;
+        /* eslint-enable @typescript-eslint/no-unused-vars */
         if (screeningData.experience && screeningData.experience.length > 3000) {
             screeningData.experience = screeningData.experience.slice(0, 3000) + '... [truncated]';
         }
@@ -233,7 +238,7 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
                     ? totalExp
                     : 'Not provided. Please calculate total years of experience by carefully analyzing the duration of their past roles in the experience section.';
 
-                let requestPayload: any = {
+                const requestPayload: any = {
                     model: cleanModel,
                     messages: [
                         {

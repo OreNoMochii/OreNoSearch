@@ -33,6 +33,6 @@ repos:
     hooks:
       - id: no-shell-exec
         name: Reject exec()/execSync() in backend TypeScript
-        entry: bash -c 'if git diff --cached --name-only -- "backend/src/**/*.ts" | xargs -r grep -lE "\bexecSync\(|\bexec\(" 2>/dev/null; then echo "exec()/execSync() enable shell injection (B1). Use utils/python_runner.ts."; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only -- "packages/api/src/**/*.ts" | xargs -r grep -lE "\bexecSync\(|\bexec\(" 2>/dev/null; then echo "exec()/execSync() enable shell injection (B1). Use utils/python_runner.ts."; exit 1; fi'
         language: system
         pass_filenames: false

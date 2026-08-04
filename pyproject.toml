@@ -49,6 +49,6 @@ module = ["machine_learning.src.*"]
 ignore_errors = true   # ML training code is exploratory; service code is checked
 
 [tool.pytest.ini_options]
-testpaths = ["machine_learning/retrieval_service", "machine_learning/src"]
+testpaths = ["services/retrieval", "machine_learning/src"]
 python_files = ["test_*.py"]
 addopts = "-q"

@@ -78,6 +78,8 @@ function pump(): void {
 }
 
 export class OutreachController {
+    // so Express routes stay uniform and future awaits need no signature change.
+    // eslint-disable-next-line @typescript-eslint/require-await -- uniform async route signature
     static async triggerOutreach(req: Request, res: Response): Promise<Response> {
         const parsed = OutreachRequest.safeParse(req.body);
         if (!parsed.success) {

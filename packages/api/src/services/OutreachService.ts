@@ -1,4 +1,4 @@
-import { logInfo, logWarn, logError, logDebug, logSkipped } from '../utils/logger';
+import { logInfo, logWarn, logError, logSkipped } from '../utils/logger';
 import { config } from '../config';
 import { runPython } from '../utils/python_runner';
 import { emailService } from './EmailService';
@@ -16,7 +16,6 @@ import {
 import { recordBatchProgress } from '../controllers/OutreachController';
 import { createObjectCsvWriter } from 'csv-writer';
 import fs from 'fs';
-import fsp from 'fs/promises';
 import path from 'path';
 
 const OUTPUT_CSV = path.join(process.cwd(), 'generated_outreach_emails.csv');
@@ -27,10 +26,10 @@ const OUTPUT_CSV = path.join(process.cwd(), 'generated_outreach_emails.csv');
  */
 const BLOCKED_RECIPIENTS = new Set(config.OUTREACH_BLOCKED_RECIPIENTS.map((e) => e.toLowerCase()));
 
-const PY_INFERENCE = path.resolve(__dirname, '../../../machine_learning/src/inference.py');
+const PY_INFERENCE = path.resolve(__dirname, '../../../../machine_learning/src/inference.py');
 const PY_TREE_SCORER = path.resolve(
     __dirname,
-    '../../../machine_learning/tree_scorer/jd_tree_scorer.py',
+    '../../../../machine_learning/tree_scorer/jd_tree_scorer.py',
 );
 
 type RiskMap = Record<string, RiskScoreEntry>;

@@ -8,7 +8,7 @@
   "endOfLine": "lf",
   "overrides": [
     {
-      "files": ["frontend/**/*.{ts,tsx,css}", "*.json", "*.yml", "*.yaml"],
+      "files": ["packages/web/**/*.{ts,tsx,css}", "*.json", "*.yml", "*.yaml"],
       "options": { "tabWidth": 2 }
     }
   ]

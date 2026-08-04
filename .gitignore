@@ -29,6 +29,7 @@ hf_env/
 *.p12
 *.pfx
 client_secret*.json
+/certs/
 token.json
 credentials.json
 service-account*.json
@@ -43,9 +44,9 @@ logs/
 .metaview_state.json
 dom_analysis.json
 /coverage/
-/backend/generated_outreach_emails.csv
-/backend/generated_outreach_emails.txt
-/backend/skipped_candidates.log
+/packages/api/generated_outreach_emails.csv
+/packages/api/generated_outreach_emails.txt
+/packages/api/skipped_candidates.log
 /machine_learning/*_log*.txt
 /machine_learning/exit_code*.txt
 /machine_learning/extract_exit_code.txt

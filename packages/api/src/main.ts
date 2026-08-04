@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { timingSafeEqual, createHash } from 'crypto';
 
-import { config, isProduction } from './config';
+import { config } from './config';
 import { logInfo, logWarn, logError, logger } from './utils/logger';
 import { OutreachController } from './controllers/OutreachController';
 import { SearchController } from './controllers/SearchController';

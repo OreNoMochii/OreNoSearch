@@ -34,7 +34,7 @@ services:
     secrets: [db_user, db_password]
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./src/migrations:/docker-entrypoint-initdb.d:ro
+      - ./packages/scraper/migrations:/docker-entrypoint-initdb.d:ro
     networks: [backend]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$$(cat /run/secrets/db_user)" -d "$${POSTGRES_DB}"']
@@ -88,7 +88,7 @@ services:
 
   api:
     build:
-      context: ./backend
+      context: ./packages/api
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -118,7 +118,7 @@ services:
 
   retrieval:
     build:
-      context: ./machine_learning/retrieval_service
+      context: ./services/retrieval
     environment:
       DB_HOST: postgres
       VECTOR_DB_HOST: pgvector_search

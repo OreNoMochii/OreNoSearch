@@ -17,6 +17,8 @@ Key improvements over naive reranking:
 import re
 import threading
 import asyncio
+import os
+import pathlib
 from typing import Optional
 from config import RERANKER_MODEL
 
@@ -395,13 +397,17 @@ def _rerank_sync(
     scored.sort(key=lambda x: x["reranker_score"], reverse=True)
     top_candidates = scored[:top_k]
 
-    # --- TEMPORARY FEATURE: DUMP TOP N RESULTS TO TEXT FILE ---
+    # --- Debug dump of the reranked shortlist (opt-in) ---
+    # This previously ran unconditionally on every /search request: a synchronous
+    # write to a single fixed path, so concurrent requests raced and clobbered
+    # each other's output, and a hardcoded developer path was baked into the
+    # comment. Now gated behind RERANKER_DEBUG_DUMP=1.
+    if os.getenv("RERANKER_DEBUG_DUMP") != "1":
+        return top_candidates
+
     try:
-        import os
-        # Save to the root of the project: /Users/zarb/exentive_projects/metaview_scraper/semantic_top_results.txt
-        # __file__ is in machine_learning/retrieval_service/
-        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        output_path = os.path.join(root_dir, "semantic_top_results.txt")
+        root_dir = pathlib.Path(__file__).resolve().parent.parent.parent
+        output_path = root_dir / "semantic_top_results.txt"
         
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(f"Top {top_k} Candidates from Semantic Reranker\n")

@@ -14,7 +14,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // The ONLY dotenv.config() call in the backend.
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
 
 /** Comma-separated string -> trimmed, non-empty array. */
 const csv = () =>

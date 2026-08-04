@@ -119,11 +119,19 @@ export async function initDb() {
               RETURN 0;
           END IF;
           
-          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\d+)\s*yr[s]?', 'g'))[1]::int AS yrs LOOP
+          -- NOTE the doubled backslashes. This SQL lives in a JS template
+          -- literal, where \\d and \\s are not recognised escape sequences, so
+          -- JavaScript silently drops the backslash and Postgres received
+          -- '(?i)(d+)s*yr[s]?' — a pattern matching literal 'd' characters
+          -- rather than digits. Because initDb() issues CREATE OR REPLACE and
+          -- is called from the scraper entrypoint, running the scraper would
+          -- have overwritten a working function with one that returns 0 for
+          -- every input, silently zeroing every minExp/maxExp filter.
+          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d+)\\s*yr[s]?', 'g'))[1]::int AS yrs LOOP
               total_m := total_m + (rec.yrs * 12);
           END LOOP;
 
-          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\d+)\s*mo[s]?', 'g'))[1]::int AS mos LOOP
+          FOR rec IN SELECT (regexp_matches(exp, '(?i)(\\d+)\\s*mo[s]?', 'g'))[1]::int AS mos LOOP
               total_m := total_m + rec.mos;
           END LOOP;
 
@@ -461,18 +469,13 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
         // Location filter (ILIKE for region-level matching)
         if (params.locations && params.locations.length > 0) {
             const locConditions: string[] = [];
-            const locValues: string[] = [];
-            let locIdx = 1;
             for (const loc of params.locations) {
-                let cleanLoc = loc.replace(/\s*\([^)]*\)/g, '').trim();
+                const cleanLoc = loc.replace(/\s*\([^)]*\)/g, '').trim();
                 const parts = cleanLoc.split(/\s*\/\s*/).filter(Boolean);
                 for (const part of parts) {
                     locConditions.push(`location ILIKE $${paramIndex}`);
                     values.push(`%${part}%`);
                     paramIndex++;
-
-                    locValues.push(`%${part}%`);
-                    locIdx++;
                 }
             }
             conditions.push(`(${locConditions.join(' OR ')})`);
@@ -546,7 +549,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
         const res = await client.query(finalQuery, [...values, params.limit]);
 
         const total = res.rows.length > 0 ? parseInt(res.rows[0].total_count, 10) : 0;
-        const hits = res.rows.map(({ total_count, ...rest }) => rest);
+        const hits = res.rows.map(({ total_count: _total, ...rest }) => rest);
 
         return { hits, total };
     } finally {

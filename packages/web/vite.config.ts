@@ -10,14 +10,14 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
   // Load env from parent directory
-  const env = loadEnv(mode, path.resolve(__dirname, '..'), '');
+  const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
   const API_USER = env.API_USER || 'admin';
   const API_PASS = env.API_PASS || 'pass123';
 
   return {
     // Load .env from the repo root so VITE_* vars (e.g. VITE_MEILI_KEY) are
     // available to client code without duplicating the file into frontend/.
-    envDir: path.resolve(__dirname, '..'),
+    envDir: path.resolve(__dirname, '../..'),
     plugins: [
       react(),
       {
@@ -112,8 +112,8 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       https: {
-        key: fs.readFileSync(path.resolve(__dirname, '../search-ui/certs/key.pem')),
-        cert: fs.readFileSync(path.resolve(__dirname, '../search-ui/certs/cert.pem')),
+        key: fs.readFileSync(path.resolve(__dirname, '../../certs/key.pem')),
+        cert: fs.readFileSync(path.resolve(__dirname, '../../certs/cert.pem')),
       },
       proxy: {
         '/meilisearch': {

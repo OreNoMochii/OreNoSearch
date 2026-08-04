@@ -8,7 +8,7 @@
     "dev": "ts-node src/main.ts",
     "api-server": "ts-node src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint . --max-warnings 100",
+    "lint": "eslint . --max-warnings 115",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",

@@ -30,7 +30,7 @@ export class GoogleSheetsService {
     private sheets: sheets_v4.Sheets | null = null;
     private drive: drive_v3.Drive | null = null;
 
-    private async getAuth() {
+    private getAuth() {
         const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
         if (!credPath) {
             throw new Error('GOOGLE_APPLICATION_CREDENTIALS not set in .env');
@@ -69,10 +69,10 @@ export class GoogleSheetsService {
         return auth;
     }
 
-    private async ensureClients() {
+    private ensureClients() {
         if (this.sheets && this.drive) return;
 
-        const auth = await this.getAuth();
+        const auth = this.getAuth();
         this.sheets = google.sheets({ version: 'v4', auth });
         this.drive = google.drive({ version: 'v3', auth });
     }
@@ -82,7 +82,7 @@ export class GoogleSheetsService {
      * Returns the folder ID.
      */
     private async findOrCreateFolder(folderName: string, parentId: string): Promise<string> {
-        await this.ensureClients();
+        this.ensureClients();
 
         // Search for existing folder
         try {
@@ -136,7 +136,7 @@ export class GoogleSheetsService {
         folderId: string,
         spreadsheetName: string,
     ): Promise<string | null> {
-        await this.ensureClients();
+        this.ensureClients();
 
         const escapedName = spreadsheetName.replace(/'/g, "\\'");
 
@@ -169,7 +169,7 @@ export class GoogleSheetsService {
      * Returns the new spreadsheet ID.
      */
     private async createSpreadsheet(folderId: string, spreadsheetName: string): Promise<string> {
-        await this.ensureClients();
+        this.ensureClients();
 
         try {
             // Create the spreadsheet
@@ -286,7 +286,7 @@ export class GoogleSheetsService {
      * Read existing profile URLs from column C to avoid duplicates.
      */
     private async getExistingUrls(spreadsheetId: string): Promise<Set<string>> {
-        await this.ensureClients();
+        this.ensureClients();
 
         try {
             const res = await this.sheets!.spreadsheets.values.get({
@@ -325,7 +325,7 @@ export class GoogleSheetsService {
         >,
         sharedWith: string,
     ): Promise<number> {
-        await this.ensureClients();
+        this.ensureClients();
 
         const existingUrls = await this.getExistingUrls(spreadsheetId);
         const now = new Date().toISOString();
@@ -396,7 +396,7 @@ export class GoogleSheetsService {
         existingUrls: Set<string>,
         sharedWith: string,
     ): Promise<boolean> {
-        await this.ensureClients();
+        this.ensureClients();
 
         const url = candidate.profile_url || '';
         if (!url) return false;
@@ -452,7 +452,7 @@ export class GoogleSheetsService {
         spreadsheetId: string,
         riskData: Record<string, { hazard: number; move_prob: number; tenure: number }>,
     ): Promise<void> {
-        await this.ensureClients();
+        this.ensureClients();
 
         if (Object.keys(riskData).length === 0) return;
 
