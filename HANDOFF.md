@@ -1,6 +1,6 @@
 # Handoff — state and next steps
 
-Written at commit `9c9ca0b`. Update or delete this file as items are closed.
+Written at commit `161f53b`. Update or delete this file as items are closed.
 
 ## Current state
 
@@ -25,7 +25,7 @@ a 9.4 GB table under an `ACCESS EXCLUSIVE` lock).
 
 ## What needs doing, highest value first
 
-### 1. Correct the README — it currently misleads
+### 1. ~~Correct the README~~ — DONE
 
 This is first because it is the document a new deployer trusts, and three of
 its claims are false:
@@ -60,33 +60,44 @@ Retained and confirmed used: `idx_cu_location_trgm` (20 scans),
 `idx_cu_total_exp_months` (7), `idx_cu_latest_role_trgm` (1, serves the
 `currentRoleKeywords` filter).
 
-### 3. Finish the UI consolidation (§4 remainder)
+### 3. Finish the UI consolidation — PARTIAL
 
-Every WCAG-blocking defect is closed. What remains is stylistic:
+`LocationPicker` extracted (236 lines, 19 inline styles). Remaining:
 
-- **103 inline styles** in `App.tsx` (down from 218). These are layout
-  scaffolding in the search panel and results list.
-- **`Field.tsx`, `controls.tsx`, `InfoTooltip.tsx` are built, styled and
-  unused** — only `OutreachForm` routes through them. The search panel's inputs
-  still use bare markup.
-- `App.tsx` is 1,535 lines. Extracting `LocationPicker`,
-  `BooleanQueryBuilder`, `SearchFilters` and `ResultsList` is the path to ~200.
+- **84 inline styles** in `App.tsx` (was 218, then 103)
+- `App.tsx` is 1,308 lines (was 1,652)
+- Still inline: the boolean query builder (~36 styles), the actions/results
+  region (~25), and the outreach modal body (~38)
+- `Field`, `controls` and `InfoTooltip` remain used only by `OutreachForm`
 
-Do this with the app running and visually compared — there is no visual
-regression test, so a blind refactor risks silent layout breakage.
+**How to verify safely.** There is no visual regression test, so use a browser:
 
-### 4. Extend test coverage
+```bash
+mv certs /tmp/certs_stash          # devCerts -> undefined, serves plain HTTP
+cd packages/web && npm run build && npx vite preview --port 4173 --host 127.0.0.1
+# capture, refactor, capture again, compare
+mv /tmp/certs_stash certs          # restore
+```
 
-84 tests cover pure logic only. Not covered:
+`vite preview` skips the dev-only basic-auth and IP-allowlist middleware, so a
+browser can reach it. **Capture screenshots twice** — the panel uses a
+framer-motion fade-in, and a single early capture looks like a blank page.
 
-- **Integration**: no test starts the API against a real Postgres/Redis. The
-  highest-value addition is a smoke test hitting `/api/search` and
-  `/api/locations` against a throwaway container.
-- **Frontend**: zero tests. `searchClient.ts`'s `combineSets` boolean logic is
-  pure and worth testing.
-- **Python**: 2 test files exist in `machine_learning/`; the retrieval service
-  has none. `ruff` is not installed locally, so the lint gate has only ever run
-  in CI.
+### 4. ~~Extend test coverage~~ — DONE
+
+**119 tests total**: 84 api unit, 20 web unit, 15 api integration.
+
+The integration suite runs against real Postgres and Redis and skips itself
+unless `RUN_INTEGRATION=1`, so CI without infrastructure stays green. It is
+read-only — it never enqueues a campaign, sends email or writes candidate data.
+
+```bash
+npm run test:integration --workspace @metaview/api
+```
+
+Still uncovered: the retrieval service, which is the ML pipeline and excluded
+from testing by instruction. `ruff` is not installed locally, so the Python
+lint gate has only ever run in CI.
 
 ### 5. Deferred by decision
 
