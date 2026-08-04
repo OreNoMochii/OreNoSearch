@@ -28,7 +28,7 @@ The repository is structured as a monorepo featuring domain-driven, loosely coup
 ### 1. Infrastructure (Database & Search Engines)
 Start the foundational databases (PostgreSQL, pgvector, and Meilisearch) using the local override:
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d postgres pgvector_search meilisearch pgadmin
+docker-compose up -d
 ```
 
 | Container | Port | Purpose |
