@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useDeferredValue, useId } from 'react';
-import { Search, Plus, X, Briefcase, MapPin, Download, Ban } from 'lucide-react';
+import { Search, Plus, X, Briefcase, Download, Ban } from 'lucide-react';
 import {
   runBooleanSearch,
   getAvailableLocations,
@@ -12,6 +12,7 @@ import { QueueMonitor } from './components/QueueMonitor';
 import { useQueueStatus } from './hooks/useQueueStatus';
 import { OutreachForm } from './components/OutreachForm';
 import { CandidateCard } from './components/CandidateCard';
+import { LocationPicker } from './components/LocationPicker';
 import { ExplainableAction } from './components/ExplainableAction';
 
 const API_BASE_URL = '';
@@ -456,242 +457,14 @@ function App() {
             animate={{ x: 0, opacity: 1 }}
             transition={{ delay: 0.1 }}
           >
-            <div
-              className="input-group"
-              style={{
-                border: '2px solid rgba(59, 130, 246, 0.5)',
-                padding: '1rem',
-                borderRadius: '0.75rem',
-                background: 'rgba(59, 130, 246, 0.05)',
-                marginBottom: '1.5rem',
-              }}
-            >
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  color: '#60a5fa',
-                  fontSize: '1.1rem',
-                  marginBottom: '1rem',
-                }}
-              >
-                <MapPin size={20} />
-                Step 1: Select Target Locations (Required)
-              </label>
-              <div
-                style={{
-                  background: 'rgba(15, 23, 42, 0.5)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '0.5rem',
-                  padding: '0.5rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.4rem',
-                }}
-              >
-                <input
-                  type="text"
-                  value={locationSearch}
-                  onChange={(e) => setLocationSearch(e.target.value)}
-                  placeholder="Search locations..."
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    borderRadius: '0.25rem',
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff',
-                    outline: 'none',
-                    fontSize: '0.85rem',
-                  }}
-                />
-                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const matching = visibleLocations;
-                      const toAdd = matching.filter((loc) => !selectedLocations.includes(loc));
-                      setSelectedLocations([...selectedLocations, ...toAdd]);
-                    }}
-                    style={{
-                      flex: 1,
-                      background: 'rgba(59, 130, 246, 0.2)',
-                      border: '1px solid rgba(59, 130, 246, 0.3)',
-                      color: '#93c5fd',
-                      padding: '0.3rem',
-                      borderRadius: '0.25rem',
-                      fontSize: '0.8rem',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Check All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const matching = visibleLocations;
-                      setSelectedLocations(
-                        selectedLocations.filter((loc) => !matching.includes(loc)),
-                      );
-                    }}
-                    style={{
-                      flex: 1,
-                      background: 'rgba(239, 68, 68, 0.2)',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      color: '#fca5a5',
-                      padding: '0.3rem',
-                      borderRadius: '0.25rem',
-                      fontSize: '0.8rem',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Uncheck All
-                  </button>
-                </div>
-                <div
-                  style={{
-                    maxHeight: '150px',
-                    overflowY: 'auto',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.4rem',
-                  }}
-                >
-                  {availableLocations.length === 0 && (
-                    <div
-                      style={{
-                        padding: '0.5rem',
-                        color: '#94a3b8',
-                        fontSize: '0.85rem',
-                        fontStyle: 'italic',
-                      }}
-                    >
-                      No locations found. (Loading...)
-                    </div>
-                  )}
-                  {visibleLocations.map((loc) => (
-                    <label
-                      key={loc}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        cursor: 'pointer',
-                        margin: 0,
-                        padding: '0.2rem 0.5rem',
-                        borderRadius: '0.25rem',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedLocations.includes(loc)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedLocations([...selectedLocations, loc]);
-                          } else {
-                            setSelectedLocations(selectedLocations.filter((l) => l !== loc));
-                          }
-                        }}
-                        style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
-                      />
-                      <span style={{ color: '#e2e8f0', fontSize: '0.9rem' }}>{loc}</span>
-                    </label>
-                  ))}
-                </div>
-                {selectedLocations.length > 0 && (
-                  <div
-                    style={{
-                      marginTop: '0.75rem',
-                      paddingTop: '0.5rem',
-                      borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: '0.5rem',
-                      }}
-                    >
-                      <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: 600 }}>
-                        Active Location Filters ({selectedLocations.length}):
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedLocations([])}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#fca5a5',
-                          fontSize: '0.75rem',
-                          cursor: 'pointer',
-                          textDecoration: 'underline',
-                          padding: 0,
-                        }}
-                      >
-                        Clear All
-                      </button>
-                    </div>
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: '0.4rem',
-                        maxHeight: '120px',
-                        overflowY: 'auto',
-                        padding: '0.2rem',
-                      }}
-                    >
-                      {selectedLocations.map((loc) => (
-                        <div
-                          key={loc}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.35rem',
-                            background: 'rgba(59, 130, 246, 0.2)',
-                            border: '1px solid rgba(59, 130, 246, 0.4)',
-                            borderRadius: '1rem',
-                            padding: '0.2rem 0.65rem 0.2rem 0.4rem',
-                            fontSize: '0.8rem',
-                            color: '#e2e8f0',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setSelectedLocations(selectedLocations.filter((l) => l !== loc))
-                            }
-                            title={`Remove ${loc}`}
-                            style={{
-                              background: 'rgba(239, 68, 68, 0.3)',
-                              border: 'none',
-                              borderRadius: '50%',
-                              width: '16px',
-                              height: '16px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: 'pointer',
-                              padding: 0,
-                              color: '#fca5a5',
-                            }}
-                          >
-                            <X size={10} />
-                          </button>
-                          <span>{loc}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <span className="input-helper">
-                You must select at least one location before running a search.
-              </span>
-            </div>
+            <LocationPicker
+              locationSearch={locationSearch}
+              onLocationSearchChange={setLocationSearch}
+              availableLocations={availableLocations}
+              visibleLocations={visibleLocations}
+              selectedLocations={selectedLocations}
+              onSelectedLocationsChange={setSelectedLocations}
+            />
 
             <div style={{ opacity: selectedLocations.length === 0 ? 0.5 : 1 }}>
               <h2

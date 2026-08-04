@@ -44,10 +44,10 @@ keyboard-reachable action explanations, `Field` + `controls` for labelled form
 inputs, and a memoised `CandidateCard`. Design tokens with a light/dark
 contract and `prefers-reduced-motion` handling are in `src/styles/tokens.css`.
 
-> **Partially applied.** `App.tsx` is ~1,500 lines and still carries ~103 inline
-> style objects, down from 218. `Field`, `controls` and `InfoTooltip` are built
-> and styled but currently used only by `OutreachForm`. Extracting the search
-> panel into components is outstanding work.
+> **Partially applied.** `App.tsx` is ~1,300 lines and carries ~84 inline style
+> objects, down from 218. `LocationPicker` has been extracted; the query
+> builder, filter panel and results list have not. `Field`, `controls` and
+> `InfoTooltip` are built and styled but currently used only by `OutreachForm`.
 
 ## Local development
 
@@ -105,19 +105,29 @@ Other root scripts:
 ## Testing
 
 ```bash
-npm run test --workspace @metaview/api          # 84 tests
-npm run test:coverage --workspace @metaview/api # with thresholds
+npm test                                          # all workspaces
+npm run test --workspace @metaview/api            # 84 unit tests
+npm run test --workspace @metaview/web            # 20 unit tests
+npm run test:integration --workspace @metaview/api  # 15, needs infrastructure
 ```
 
-The suites cover pure logic and process-level behaviour, so they need no
+**119 tests total.**
+
+The unit suites cover pure logic and process-level behaviour, so they need no
 Postgres, Redis, Meilisearch, Google credentials or LLM provider. Each is a
 regression test for a specific defect: tsquery operator injection, SMTP header
-injection, the rate-limiter race, shell injection in the Python runner, and
-request/response schema validation.
+injection, the rate-limiter race, shell injection in the Python runner, request
+and response schema validation, and the boolean set algebra behind search.
 
-> **Scope.** There are no integration tests, no frontend tests, and no tests
-> for the retrieval service. The ML pipeline is work in progress and
-> deliberately excluded.
+The integration suite exercises the real HTTP surface against real Postgres and
+Redis — health probes, authentication, the locations cache, search validation,
+the capped-total contract, and the Meilisearch proxy allowlist. It **skips
+itself** unless `RUN_INTEGRATION=1`, so CI without infrastructure stays green
+rather than failing for the wrong reason, and it is read-only: it never
+enqueues a campaign, sends email or writes candidate data.
+
+> **Scope.** The retrieval service has no tests. It is the ML pipeline, which
+> is work in progress and deliberately excluded.
 
 ## Database
 
