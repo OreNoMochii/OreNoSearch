@@ -188,24 +188,3 @@ export class OutreachOrchestrator {
     });
   }
 }
-
-import { TreeScreeningAdapter } from '../infrastructure/TreeScreeningAdapter';
-import { LlmScreeningAdapter } from '../infrastructure/LlmScreeningAdapter';
-import { PipelineScreeningAdapter } from '../infrastructure/PipelineScreeningAdapter';
-import { HttpRiskScorer } from '../infrastructure/HttpRiskScorer';
-import { GoogleSheetsSink } from '../infrastructure/GoogleSheetsSink';
-import { EmailNotifier } from '../infrastructure/EmailNotifier';
-import { PostgresOutreachHistory } from '../infrastructure/PostgresOutreachHistory';
-
-export const outreachOrchestrator = new OutreachOrchestrator(
-  new Map<string, ScreeningStrategy>([
-    ['tree', new TreeScreeningAdapter()],
-    ['llm', new LlmScreeningAdapter()],
-    ['pipeline', new PipelineScreeningAdapter()],
-    ['tree_llm', new LlmScreeningAdapter()], // Or a dedicated Hybrid adapter
-  ]),
-  new HttpRiskScorer(config.ML_SCORING_URL, config.RETRIEVAL_TIMEOUT_MS),
-  new GoogleSheetsSink(),
-  new EmailNotifier(),
-  new PostgresOutreachHistory(),
-);

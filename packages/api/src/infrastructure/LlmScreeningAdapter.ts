@@ -3,15 +3,18 @@ import {
   ScreenedCandidate,
   ScreeningOptions,
   ScreeningResult,
+  ProgressReporter,
+  nullProgressReporter,
 } from '../domain/ports';
 import type { CompanyIntel } from '../repositories/postgres_repo';
 import { screeningAgent } from '../services/ScreeningAgent';
 import { logInfo, logError, logWarn, logSkipped } from '../utils/logger';
-import { recordBatchProgress } from '../controllers/OutreachController';
 import { saveScreeningResult, getCompanyIntelBatch } from '../repositories/postgres_repo';
 
 export class LlmScreeningAdapter implements ScreeningStrategy {
   readonly name = 'llm';
+
+  constructor(private readonly progress: ProgressReporter = nullProgressReporter) {}
 
   /**
    * Batch-loads employer intel for the candidate set in a single query.
@@ -131,7 +134,7 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
             logError('candidate_screening_failed', err as Error, { name: candidate.name });
             return { status: 'error' as const, candidate };
           } finally {
-            recordBatchProgress(opts.batchId);
+            this.progress.report(opts.batchId);
           }
         }),
       );

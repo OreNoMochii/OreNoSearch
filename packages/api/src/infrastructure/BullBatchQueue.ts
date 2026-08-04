@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 import { config } from '../config';
 import type { BatchQueue } from '../domain/ports';
 import type { CandidateInput } from '../core/schemas';
-import { outreachOrchestrator } from '../services/OutreachOrchestrator';
+import { outreachOrchestrator } from '../composition';
 import { logInfo, logWarn, logError } from '../utils/logger';
 
 /** Payload persisted in Redis for one outreach campaign. */

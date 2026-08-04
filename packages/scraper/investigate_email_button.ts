@@ -20,7 +20,7 @@ async function investigate() {
     pages.push(...ctx.pages());
   }
 
-  const sourcingPages = pages.filter(p => p.url().includes('my.metaview.app/sourcing'));
+  const sourcingPages = pages.filter((p) => p.url().includes('my.metaview.app/sourcing'));
 
   if (sourcingPages.length === 0) {
     console.log('No Metaview sourcing tabs found.');
@@ -36,14 +36,15 @@ async function investigate() {
   // Find all mail buttons
   const mailButtons = await page.evaluate(() => {
     const buttons = Array.from(document.querySelectorAll('button'));
-    const mailBtns = buttons.filter(b => {
+    const mailBtns = buttons.filter((b) => {
       const svg = b.querySelector('svg.lucide-mail, svg.lucide.lucide-mail');
       return !!svg;
     });
     return mailBtns.map((btn, idx) => {
       const rect = btn.getBoundingClientRect();
       return {
-        idx, id: btn.id,
+        idx,
+        id: btn.id,
         className: btn.className,
         boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       };
@@ -69,9 +70,11 @@ async function investigate() {
   await page.evaluate((btnId: string) => {
     const el = document.getElementById(btnId);
     if (!el) return;
-    ['pointerenter', 'mouseenter', 'pointerover', 'mouseover', 'pointermove', 'mousemove'].forEach(eventType => {
-      el.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true }));
-    });
+    ['pointerenter', 'mouseenter', 'pointerover', 'mouseover', 'pointermove', 'mousemove'].forEach(
+      (eventType) => {
+        el.dispatchEvent(new PointerEvent(eventType, { bubbles: true, cancelable: true }));
+      },
+    );
   }, btn.id);
   await delay(2000);
 
@@ -107,10 +110,18 @@ async function investigate() {
   // Check if a modal/dialog/dropdown appeared
   const modals = await page.evaluate(() => {
     const modalSelectors = [
-      '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
-      '[data-state="open"]', '[class*="modal"]', '[class*="Modal"]',
-      '[class*="dropdown"]', '[class*="Dropdown"]', '[class*="overlay"]',
-      '[class*="Overlay"]', '[class*="popover"]', '[class*="Popover"]'
+      '[role="dialog"]',
+      '[role="menu"]',
+      '[role="listbox"]',
+      '[data-state="open"]',
+      '[class*="modal"]',
+      '[class*="Modal"]',
+      '[class*="dropdown"]',
+      '[class*="Dropdown"]',
+      '[class*="overlay"]',
+      '[class*="Overlay"]',
+      '[class*="popover"]',
+      '[class*="Popover"]',
     ];
     const found: any[] = [];
     for (const sel of modalSelectors) {
@@ -139,32 +150,44 @@ async function investigate() {
 
   // ── Approach 4: Check DOM diff ──
   const domSnapshotAfter = await page.evaluate(() => document.body.innerHTML.length);
-  console.log(`\nDOM size after all interactions: ${domSnapshotAfter} chars (delta: ${domSnapshotAfter - domSnapshotBefore})`);
+  console.log(
+    `\nDOM size after all interactions: ${domSnapshotAfter} chars (delta: ${domSnapshotAfter - domSnapshotBefore})`,
+  );
 
   // ── Approach 5: Check all elements near the button coordinates ──
   console.log('\n=== APPROACH 5: Elements near button position ===');
   const nearbyEls = await page.evaluate((box: any) => {
     const allEls = Array.from(document.querySelectorAll('*'));
-    const nearby = allEls.filter(el => {
+    const nearby = allEls.filter((el) => {
       const rect = el.getBoundingClientRect();
       const centerX = rect.x + rect.width / 2;
       const centerY = rect.y + rect.height / 2;
       const btnCenterX = box.x + box.width / 2;
       const btnCenterY = box.y + box.height / 2;
       const dist = Math.sqrt(Math.pow(centerX - btnCenterX, 2) + Math.pow(centerY - btnCenterY, 2));
-      return dist < 200 && (el as HTMLElement).innerText?.trim().length > 0
-             && (el as HTMLElement).innerText?.trim().length < 300;
+      return (
+        dist < 200 &&
+        (el as HTMLElement).innerText?.trim().length > 0 &&
+        (el as HTMLElement).innerText?.trim().length < 300
+      );
     });
-    return nearby.map(el => ({
-      tagName: el.tagName,
-      className: el.className?.toString().substring(0, 100),
-      text: (el as HTMLElement).innerText?.trim().substring(0, 200),
-      rect: (() => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })(),
-    })).slice(0, 30);
+    return nearby
+      .map((el) => ({
+        tagName: el.tagName,
+        className: el.className?.toString().substring(0, 100),
+        text: (el as HTMLElement).innerText?.trim().substring(0, 200),
+        rect: (() => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        })(),
+      }))
+      .slice(0, 30);
   }, btn.boundingBox);
 
   for (const n of nearbyEls) {
-    console.log(`  <${n.tagName}> (${Math.round(n.rect.x)},${Math.round(n.rect.y)} ${Math.round(n.rect.w)}x${Math.round(n.rect.h)}) class="${n.className}"`);
+    console.log(
+      `  <${n.tagName}> (${Math.round(n.rect.x)},${Math.round(n.rect.y)} ${Math.round(n.rect.w)}x${Math.round(n.rect.h)}) class="${n.className}"`,
+    );
     console.log(`    "${n.text.substring(0, 120)}"`);
   }
 
@@ -174,9 +197,11 @@ async function investigate() {
     const el = document.getElementById(btnId);
     if (!el) return null;
     // React stores fiber data on __reactFiber$ or __reactInternalInstance$
-    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-    
+    const fiberKey = Object.keys(el).find(
+      (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
+    );
+    const propsKey = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+
     let propsData: any = null;
     if (propsKey) {
       const props = (el as any)[propsKey];
@@ -184,7 +209,12 @@ async function investigate() {
       propsData = {};
       for (const key of Object.keys(props)) {
         const val = props[key];
-        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val === null) {
+        if (
+          typeof val === 'string' ||
+          typeof val === 'number' ||
+          typeof val === 'boolean' ||
+          val === null
+        ) {
           propsData[key] = val;
         } else if (typeof val === 'object' && val !== null) {
           try {
@@ -202,7 +232,7 @@ async function investigate() {
       hasProps: !!propsKey,
       propsKey: propsKey || null,
       props: propsData,
-      allKeys: Object.keys(el).filter(k => k.startsWith('__')),
+      allKeys: Object.keys(el).filter((k) => k.startsWith('__')),
     };
   }, btn.id);
   console.log(`React fiber found: ${reactData?.hasFiber}`);
@@ -234,7 +264,7 @@ async function scanForNewContent(page: any, btnId: string) {
 
   // Check for tooltips
   const tooltips = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll('[role="tooltip"]')).map(el => ({
+    return Array.from(document.querySelectorAll('[role="tooltip"]')).map((el) => ({
       text: (el as HTMLElement).innerText?.trim(),
       html: el.outerHTML.substring(0, 500),
     }));
@@ -243,27 +273,38 @@ async function scanForNewContent(page: any, btnId: string) {
   // Check for any new element with email
   const emailEls = await page.evaluate(() => {
     return Array.from(document.querySelectorAll('*'))
-      .filter(el => {
+      .filter((el) => {
         const t = (el as HTMLElement).innerText || '';
         return t.includes('@') && t.length < 150 && !t.includes('{') && !t.includes('layer');
       })
-      .map(el => ({ tag: el.tagName, text: (el as HTMLElement).innerText.trim().substring(0, 150) }))
+      .map((el) => ({
+        tag: el.tagName,
+        text: (el as HTMLElement).innerText.trim().substring(0, 150),
+      }))
       .slice(0, 10);
   });
 
   // Check floating elements
   const floats = await page.evaluate(() => {
     return Array.from(document.querySelectorAll('*'))
-      .filter(el => {
+      .filter((el) => {
         const s = window.getComputedStyle(el);
         const r = el.getBoundingClientRect();
         const t = (el as HTMLElement).innerText || '';
-        return (s.position === 'fixed' || s.position === 'absolute') &&
-               r.width > 30 && r.width < 400 && r.height > 10 && r.height < 80 &&
-               t.length > 2 && t.length < 150 && !t.includes('SCRAPER');
+        return (
+          (s.position === 'fixed' || s.position === 'absolute') &&
+          r.width > 30 &&
+          r.width < 400 &&
+          r.height > 10 &&
+          r.height < 80 &&
+          t.length > 2 &&
+          t.length < 150 &&
+          !t.includes('SCRAPER')
+        );
       })
-      .map(el => ({
-        tag: el.tagName, text: (el as HTMLElement).innerText.trim(),
+      .map((el) => ({
+        tag: el.tagName,
+        text: (el as HTMLElement).innerText.trim(),
         class: el.className?.toString().substring(0, 100),
       }))
       .slice(0, 10);
@@ -283,7 +324,7 @@ function logResult(label: string, result: any) {
   for (const f of result.floats) console.log(`    <${f.tag}> class="${f.class}" → "${f.text}"`);
 }
 
-investigate().catch(err => {
+investigate().catch((err) => {
   console.error(err);
   process.exit(1);
 });

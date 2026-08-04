@@ -3,13 +3,16 @@ import {
   ScreenedCandidate,
   ScreeningOptions,
   ScreeningResult,
+  ProgressReporter,
+  nullProgressReporter,
 } from '../domain/ports';
 import { retrievalPipelineService } from '../services/RetrievalPipelineService';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { recordBatchProgress } from '../controllers/OutreachController';
 
 export class PipelineScreeningAdapter implements ScreeningStrategy {
   readonly name = 'pipeline';
+
+  constructor(private readonly progress: ProgressReporter = nullProgressReporter) {}
 
   async screen(
     jd: string,
@@ -37,7 +40,7 @@ export class PipelineScreeningAdapter implements ScreeningStrategy {
         return [];
       }
 
-      recordBatchProgress(opts.batchId, result.meta.total_retrieved);
+      this.progress.report(opts.batchId, result.meta.total_retrieved);
 
       // For pipeline, the result candidates ARE the passed candidates.
       // In Orchestrator, we need to map them back to ScreeningResult format.

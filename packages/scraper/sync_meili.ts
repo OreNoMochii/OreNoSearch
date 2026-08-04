@@ -1,11 +1,7 @@
-
 import parseArgs from 'minimist';
 import { Meilisearch } from 'meilisearch';
 import pool from './database';
-import dotenv from 'dotenv';
 import fs from 'fs';
-
-dotenv.config();
 
 const args = parseArgs(process.argv.slice(2));
 const clearIndex = args.clear || false;
@@ -55,7 +51,7 @@ function getMonthsInCurrentRole(experience?: string): number {
 
 async function syncPostgresToMeili() {
   console.log('--- Starting PostgreSQL to Meilisearch Synchronization ---');
-  
+
   if (!MEILI_KEY) {
     console.error('Error: MEILI_KEY is not set in .env');
     process.exit(1);
@@ -85,24 +81,31 @@ async function syncPostgresToMeili() {
     }
 
     const index = meiliClient.index(MEILI_INDEX);
-    
+
     // Ensure months_in_current_role, current_company, and location are filterable
     console.log('Updating filterableAttributes in Meilisearch...');
-    await index.updateFilterableAttributes(['months_in_current_role', 'current_company', 'location']);
-    
+    await index.updateFilterableAttributes([
+      'months_in_current_role',
+      'current_company',
+      'location',
+    ]);
+
     console.log('Fetching candidates in batches and adding to Meilisearch...');
     const BATCH_SIZE = 5000;
     let offset = 0;
     let batchNumber = 1;
 
     while (offset < totalCandidates) {
-      const res = await client.query(`SELECT * FROM candidates_upgraded LIMIT $1 OFFSET $2`, [BATCH_SIZE, offset]);
+      const res = await client.query(`SELECT * FROM candidates_upgraded LIMIT $1 OFFSET $2`, [
+        BATCH_SIZE,
+        offset,
+      ]);
       const candidates = res.rows;
 
       if (candidates.length === 0) break;
 
       // Transform data to match Outreach Agent expectations
-      const documents = candidates.map(c => ({
+      const documents = candidates.map((c) => ({
         id: encodeId(c.profile_url),
         name: c.name,
         email: c.email || '',
@@ -119,12 +122,14 @@ async function syncPostgresToMeili() {
         licenses: c.licenses || '',
         profile_url: c.profile_url,
         scraped_at: c.scraped_at,
-        months_in_current_role: getMonthsInCurrentRole(c.experience)
+        months_in_current_role: getMonthsInCurrentRole(c.experience),
       }));
 
       const task = await index.addDocuments(documents);
-      console.log(`Submitted batch ${batchNumber} of ${Math.ceil(totalCandidates/BATCH_SIZE)} (Task UID: ${task.taskUid}, Records: ${offset + 1} - ${offset + candidates.length})`);
-      
+      console.log(
+        `Submitted batch ${batchNumber} of ${Math.ceil(totalCandidates / BATCH_SIZE)} (Task UID: ${task.taskUid}, Records: ${offset + 1} - ${offset + candidates.length})`,
+      );
+
       offset += BATCH_SIZE;
       batchNumber++;
     }
@@ -133,7 +138,6 @@ async function syncPostgresToMeili() {
     console.log('Indexing tasks submitted to Meilisearch.');
     console.log('Meilisearch will index these documents asynchronously.');
     console.log('You can check progress via health/stats endpoints.');
-
   } catch (error) {
     console.error('Error during synchronization:', error);
   } finally {

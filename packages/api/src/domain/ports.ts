@@ -137,6 +137,23 @@ export interface OutreachHistoryRepository {
 }
 
 /**
+ * Progress sink for a running batch.
+ *
+ * Infrastructure adapters previously imported `recordBatchProgress` directly
+ * from controllers/OutreachController — the infrastructure layer reaching up
+ * into the HTTP layer's module state. That inverted the dependency direction
+ * and made the adapters unusable outside an Express process.
+ */
+export interface ProgressReporter {
+  report(batchId: number | undefined, delta?: number): void;
+}
+
+/** No-op reporter for tests and non-HTTP callers. */
+export const nullProgressReporter: ProgressReporter = {
+  report: () => undefined,
+};
+
+/**
  * Batch queue.
  *
  * The in-process implementation in OutreachController satisfies this today.

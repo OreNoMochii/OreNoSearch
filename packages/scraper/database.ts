@@ -1,15 +1,20 @@
 import { Pool } from 'pg';
-import dotenv from 'dotenv';
-
-dotenv.config();
+import { config } from './config';
 
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: parseInt(process.env.DB_PORT || '5432'),
+  host: config.DB_HOST,
+  port: config.DB_PORT,
+  database: config.DB_NAME,
+  user: config.DB_USER,
+  password: config.DB_PASSWORD,
+  max: config.DB_POOL_MAX,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  application_name: 'metaview-scraper',
 });
+
+// Without a handler, an idle-client error is an uncaught exception.
+pool.on('error', (err) => console.error('[pg pool]', err.message));
 
 export interface Candidate {
   name: string;
@@ -29,6 +34,14 @@ export interface Candidate {
 }
 
 export async function initDb() {
+  // Schema changes must be deliberate, never a side effect of a scrape.
+  // Every statement below is IF NOT EXISTS, so this is a no-op against the
+  // current schema — but it is still DDL against the golden database.
+  if (!config.ALLOW_SCHEMA_INIT) {
+    console.warn('[initDb] skipped: set ALLOW_SCHEMA_INIT=1 to apply schema DDL.');
+    return;
+  }
+
   const client = await pool.connect();
   try {
     const queryText = `
@@ -143,7 +156,7 @@ export async function saveCandidate(candidate: Candidate, tableName: string = 'c
       candidate.education,
       candidate.skills,
       candidate.language,
-      candidate.licenses
+      candidate.licenses,
     ];
     await client.query(queryText, values);
   } finally {
@@ -151,9 +164,13 @@ export async function saveCandidate(candidate: Candidate, tableName: string = 'c
   }
 }
 
-export async function hasCandidateBeenSent(profileUrl: string, emails: string[], companyName: string): Promise<boolean> {
+export async function hasCandidateBeenSent(
+  profileUrl: string,
+  emails: string[],
+  companyName: string,
+): Promise<boolean> {
   if (!emails || emails.length === 0) return false;
-  
+
   const client = await pool.connect();
   try {
     const query = `
@@ -168,7 +185,12 @@ export async function hasCandidateBeenSent(profileUrl: string, emails: string[],
   }
 }
 
-export async function logOutreachSent(profileUrl: string, emails: string[], companyName: string, jobName: string) {
+export async function logOutreachSent(
+  profileUrl: string,
+  emails: string[],
+  companyName: string,
+  jobName: string,
+) {
   if (!emails || emails.length === 0) return;
 
   const client = await pool.connect();
@@ -186,22 +208,26 @@ export async function logOutreachSent(profileUrl: string, emails: string[], comp
   }
 }
 
-export async function getSentCandidatesBatch(profileUrls: string[], emails: string[], companyName: string): Promise<Set<string>> {
-    if (!profileUrls || profileUrls.length === 0 || !emails || emails.length === 0) return new Set();
-    
-    const client = await pool.connect();
-    try {
-        const query = `
+export async function getSentCandidatesBatch(
+  profileUrls: string[],
+  emails: string[],
+  companyName: string,
+): Promise<Set<string>> {
+  if (!profileUrls || profileUrls.length === 0 || !emails || emails.length === 0) return new Set();
+
+  const client = await pool.connect();
+  try {
+    const query = `
             SELECT DISTINCT profile_url FROM outreach_history 
             WHERE profile_url = ANY($1) AND company_name = $2 AND recipient_email = ANY($3)
         `;
-        const res = await client.query(query, [profileUrls, companyName, emails]);
-        const sentUrls = new Set<string>();
-        res.rows.forEach(row => sentUrls.add(row.profile_url));
-        return sentUrls;
-    } finally {
-        client.release();
-    }
+    const res = await client.query(query, [profileUrls, companyName, emails]);
+    const sentUrls = new Set<string>();
+    res.rows.forEach((row) => sentUrls.add(row.profile_url));
+    return sentUrls;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getAllCandidateNames(limit?: number): Promise<string[]> {
@@ -227,7 +253,7 @@ export async function getAllCandidateNames(limit?: number): Promise<string[]> {
       ${limitClause}
     `;
     const res = await client.query(query);
-    return res.rows.map(r => r.name);
+    return res.rows.map((r) => r.name);
   } finally {
     client.release();
   }
