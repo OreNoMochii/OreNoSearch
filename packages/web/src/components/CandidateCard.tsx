@@ -28,9 +28,7 @@ export const CandidateCard = memo(({ hit, idx }: CandidateCardProps) => {
       >
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#f8fafc' }}>
-              {hit.full_name}
-            </h3>
+            <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#f8fafc' }}>{hit.full_name}</h3>
             {hit.tree_score !== undefined && (
               <span
                 style={{

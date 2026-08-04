@@ -12,6 +12,7 @@ import { pool, shutdownPool } from './repositories/postgres_repo';
 import { shutdownQueue } from './controllers/OutreachController';
 import { shutdownRedis } from './infrastructure/redis';
 import { initMeiliSettings } from './repositories/meilisearch_repo';
+import { getAvailableLocations } from './repositories/postgres_repo';
 
 const app = express();
 
@@ -145,6 +146,23 @@ const server = app.listen(config.PORT, config.HOST, () => {
   // Index settings are applied here rather than from the browser — needing
   // this write is why the client previously carried an admin key (B2).
   void initMeiliSettings().catch((err) => logError('meili_settings_init_failed', err));
+
+  // Warm the location cache. The aggregate scans 5.6M rows and takes ~23s
+  // cold, and /api/locations blocks the filter UI on first paint — without
+  // this the first user after every boot and every cache expiry waits that
+  // long. Fired without await so it does not delay readiness.
+  void (async () => {
+    const startedAt = Date.now();
+    try {
+      const locations = await getAvailableLocations();
+      logInfo('location_cache_warmed', {
+        count: locations.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (err) {
+      logError('location_cache_warm_failed', err, { durationMs: Date.now() - startedAt });
+    }
+  })();
 });
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────

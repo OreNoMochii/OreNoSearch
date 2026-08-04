@@ -271,7 +271,12 @@ export interface SearchQuery {
 
 export async function runBooleanSearch(
   query: SearchQuery,
-): Promise<{ hits: BooleanHit[]; total: number; uniqueLocations: string[] }> {
+): Promise<{
+  hits: BooleanHit[];
+  total: number;
+  totalIsCapped?: boolean;
+  uniqueLocations: string[];
+}> {
   const shouldTerms = query.should || [];
   const mustTerms = query.must || [];
   const mustNotTerms = query.mustNot || [];
@@ -432,7 +437,12 @@ export async function getAvailableLocations(): Promise<string[]> {
 
 export async function runSqlBooleanSearch(
   query: SearchQuery,
-): Promise<{ hits: BooleanHit[]; total: number; uniqueLocations: string[] }> {
+): Promise<{
+  hits: BooleanHit[];
+  total: number;
+  totalIsCapped?: boolean;
+  uniqueLocations: string[];
+}> {
   const API_BASE_URL = ''; // using relative path for now
 
   const payload = {
@@ -472,6 +482,9 @@ export async function runSqlBooleanSearch(
   return {
     hits: data.hits,
     total: data.total,
+    // B32: true when the server stopped counting at its cap, so `total` is a
+    // floor ("10,000+"), never an exact figure.
+    totalIsCapped: data.totalIsCapped === true,
     uniqueLocations: query.locationKeywords || [],
   };
 }

@@ -19,12 +19,13 @@
     "web:build": "npm run build --workspace @metaview/web",
     "retrieval-service": "cd services/retrieval && uvicorn main:app --host 0.0.0.0 --port 8765 --reload",
     "ingest-embeddings": "python3 services/retrieval/ingest_embeddings.py",
-    "migrate": "psql \"postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME\" -f packages/scraper/migrations/002_search_performance.sql",
+    "migrate": "docker exec -i metaview_db psql -v ON_ERROR_STOP=1 -U \"$DB_USER\" -d \"$DB_NAME\" < packages/scraper/migrations/003_search_indexes_only.sql",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "format": "prettier --write \"**/*.{ts,tsx,css,json,md,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,css,json,md,yml}\"",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "migrate:status": "docker exec metaview_db psql -U \"$DB_USER\" -d \"$DB_NAME\" -c \"SELECT indexname FROM pg_indexes WHERE tablename='candidates_upgraded' ORDER BY 1;\""
   },
   "dependencies": {
     "dotenv": "^17.4.1",

@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { config } from '../config';
-import { logError } from '../utils/logger';
+import { logError, logWarn } from '../utils/logger';
 
 /**
  * Connection pool for the golden database.
@@ -50,7 +50,27 @@ export interface Candidate {
   licenses?: string;
 }
 
+/**
+ * Creates the scraper's tables, indexes and helper function.
+ *
+ * SAFETY: this issues DDL (CREATE TABLE, ALTER TABLE, CREATE OR REPLACE
+ * FUNCTION) against the golden database. Every statement is guarded by
+ * IF NOT EXISTS, so against the current schema it is a no-op — but it is still
+ * DDL, and it runs from the scraper entrypoints.
+ *
+ * It is therefore opt-in: set ALLOW_SCHEMA_INIT=1 to permit it. Without that,
+ * this logs and returns, so no code path can modify the production schema by
+ * accident.
+ */
 export async function initDb() {
+  if (process.env.ALLOW_SCHEMA_INIT !== '1') {
+    logWarn('schema_init_skipped', {
+      reason: 'ALLOW_SCHEMA_INIT is not set to 1',
+      hint: 'Set ALLOW_SCHEMA_INIT=1 only when you intend to apply DDL.',
+    });
+    return;
+  }
+
   const client = await pool.connect();
   try {
     const queryText = `
@@ -538,16 +558,28 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
       whereClause = 'WHERE ' + conditions.join(' AND ');
     }
 
+    // B32: the count is deliberately bounded — an exact count over 5.6M rows
+    // costs seconds. But the bound was previously invisible to the caller: the
+    // capped value was returned as `total`, the UI printed it as "N total
+    // records match", and App.tsx passed it straight back as the outreach fetch
+    // limit. A query matching 500,000 candidates therefore reported 1,000 and
+    // the campaign screened only 1,000 of them.
+    //
+    // Probing COUNT_CAP + 1 makes saturation detectable, so callers can render
+    // "10,000+" and refuse to treat it as an exact figure.
+    const COUNT_CAP = 10_000;
     const countQuery = `
-            SELECT count(*) FROM (
+            SELECT count(*)::int AS n FROM (
                 SELECT 1
                 FROM candidates_upgraded
                 ${whereClause}
-                LIMIT 1000
+                LIMIT ${COUNT_CAP + 1}
             ) sub
         `;
     const countRes = await client.query(countQuery, values);
-    const total = parseInt(countRes.rows[0].count, 10);
+    const counted = countRes.rows[0].n as number;
+    const totalIsCapped = counted > COUNT_CAP;
+    const total = totalIsCapped ? COUNT_CAP : counted;
 
     const finalQuery = `
             SELECT
@@ -567,7 +599,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
         `;
 
     const res = await client.query(finalQuery, [...values, params.limit]);
-    return { hits: res.rows, total };
+    return { hits: res.rows, total, totalIsCapped, countCap: COUNT_CAP };
   } finally {
     client.release();
   }

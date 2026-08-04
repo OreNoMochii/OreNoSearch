@@ -6,10 +6,10 @@ import {
   X,
   Briefcase,
   MapPin,
-      Activity,
+  Activity,
   Download,
   Ban,
-    Info,
+  Info,
 } from 'lucide-react';
 import {
   runBooleanSearch,
@@ -23,7 +23,6 @@ import { QueueMonitor } from './components/QueueMonitor';
 import { useQueueStatus } from './hooks/useQueueStatus';
 import { OutreachForm } from './components/OutreachForm';
 import { CandidateCard } from './components/CandidateCard';
-
 
 const API_BASE_URL = '';
 
@@ -58,6 +57,9 @@ function App() {
   const [lastSearchMode, setLastSearchMode] = useState<'sql' | 'meili'>('meili');
   const [results, setResults] = useState<BooleanHit[]>([]);
   const [totalMatches, setTotalMatches] = useState<number | null>(null);
+  // B32: the server bounds its count for speed, so totalMatches can be a
+  // floor rather than an exact total. Never use it as a fetch limit.
+  const [totalIsCapped, setTotalIsCapped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<string[]>(() => {
     const saved = localStorage.getItem('search_selectedLocations');
@@ -284,7 +286,11 @@ function App() {
                 .filter(Boolean),
             )
             .filter((g) => g.length > 0),
-          limit: totalMatches || 100000,
+          // Dispatch every match, not the displayed figure. totalMatches is
+          // capped by the server for speed, so using it here silently
+          // truncated campaigns to the cap — a search matching 500,000
+          // candidates screened only 1,000 of them (B32).
+          limit: 100000,
           minExp: minExp === '' ? undefined : minExp,
           maxExp: maxExp === '' ? undefined : maxExp,
           minMonthsInCurrentRole: requireOneYearCurrentRole ? 12 : undefined,
@@ -410,11 +416,14 @@ function App() {
       setResults(resp.hits);
 
       setTotalMatches(resp.total);
+
+      setTotalIsCapped(resp.totalIsCapped === true);
       setLastSearchMode(useSql ? 'sql' : 'meili');
     } catch (err: unknown) {
       setError((err instanceof Error ? err.message : '') || 'An unexpected error occurred');
       setResults([]);
       setTotalMatches(null);
+      setTotalIsCapped(false);
     } finally {
       setLoadingState('none');
     }
@@ -452,7 +461,7 @@ function App() {
 
         <main
           id="main-content"
-          className={totalMatches === null ? "single-column-centered" : "main-grid"}
+          className={totalMatches === null ? 'single-column-centered' : 'main-grid'}
         >
           <motion.div
             className="glass-panel"
@@ -1131,8 +1140,12 @@ function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                   <h3 style={{ color: '#93c5fd', margin: 0 }}>Search Results</h3>
                   <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                    <strong>{totalMatches}</strong> total records match query constraints.
-                    Displaying top {results.length}.
+                    <strong>
+                      {totalMatches?.toLocaleString()}
+                      {totalIsCapped ? '+' : ''}
+                    </strong>{' '}
+                    {totalIsCapped ? 'or more records match' : 'total records match'} query
+                    constraints. Displaying top {results.length}.
                   </span>
                 </div>
 
@@ -1540,8 +1553,12 @@ function App() {
                         marginBottom: '1rem',
                       }}
                     >
-                      <option value="deepinfra" style={{ background: 'var(--surface-overlay)' }}>DeepInfra</option>
-                      <option value="nvidia" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM</option>
+                      <option value="deepinfra" style={{ background: 'var(--surface-overlay)' }}>
+                        DeepInfra
+                      </option>
+                      <option value="nvidia" style={{ background: 'var(--surface-overlay)' }}>
+                        NVIDIA NIM
+                      </option>
                     </select>
                   </div>
 
@@ -1565,14 +1582,34 @@ function App() {
                     >
                       {selectedProvider === 'deepinfra' && (
                         <>
-                          <option value="deepseek-ai/DeepSeek-V3.2" style={{ background: 'var(--surface-overlay)' }}>DeepSeek V3.2</option>
-                          <option value="deepseek-ai/DeepSeek-R1" style={{ background: 'var(--surface-overlay)' }}>DeepSeek R1</option>
+                          <option
+                            value="deepseek-ai/DeepSeek-V3.2"
+                            style={{ background: 'var(--surface-overlay)' }}
+                          >
+                            DeepSeek V3.2
+                          </option>
+                          <option
+                            value="deepseek-ai/DeepSeek-R1"
+                            style={{ background: 'var(--surface-overlay)' }}
+                          >
+                            DeepSeek R1
+                          </option>
                         </>
                       )}
                       {selectedProvider === 'nvidia' && (
                         <>
-                          <option value="nvidia:meta/llama-3.1-70b-instruct" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM: Llama 3.1 70B</option>
-                          <option value="nvidia:meta/llama-3.1-405b-instruct" style={{ background: 'var(--surface-overlay)' }}>NVIDIA NIM: Llama 3.1 405B</option>
+                          <option
+                            value="nvidia:meta/llama-3.1-70b-instruct"
+                            style={{ background: 'var(--surface-overlay)' }}
+                          >
+                            NVIDIA NIM: Llama 3.1 70B
+                          </option>
+                          <option
+                            value="nvidia:meta/llama-3.1-405b-instruct"
+                            style={{ background: 'var(--surface-overlay)' }}
+                          >
+                            NVIDIA NIM: Llama 3.1 405B
+                          </option>
                         </>
                       )}
                     </select>
@@ -1580,7 +1617,15 @@ function App() {
                 </>
               )}
 
-              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <div
+                className="input-group"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.5rem',
+                }}
+              >
                 <input
                   type="checkbox"
                   id="bypassDeduplication"
@@ -1588,12 +1633,23 @@ function App() {
                   onChange={(e) => setBypassDeduplication(e.target.checked)}
                   style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                 />
-                <label htmlFor="bypassDeduplication" style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>
+                <label
+                  htmlFor="bypassDeduplication"
+                  style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}
+                >
                   Force Retry: Ignore submission history and screen everyone again.
                 </label>
               </div>
 
-              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <div
+                className="input-group"
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.5rem',
+                }}
+              >
                 <input
                   type="checkbox"
                   id="useCompanyIntel"
@@ -1601,62 +1657,245 @@ function App() {
                   onChange={(e) => setUseCompanyIntel(e.target.checked)}
                   style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                 />
-                <label htmlFor="useCompanyIntel" style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>
+                <label
+                  htmlFor="useCompanyIntel"
+                  style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}
+                >
                   Use Company Intel: Look up candidate companies in database and attach metadata.
                 </label>
               </div>
 
               {(screeningEngine === 'tree' || screeningEngine === 'tree_llm') && (
-                <div className="input-group" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.2rem', marginTop: '0.5rem' }}>
-                  <label style={{ color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div
+                  className="input-group"
+                  style={{
+                    borderTop: '1px solid var(--border-subtle)',
+                    paddingTop: '1.2rem',
+                    marginTop: '0.5rem',
+                  }}
+                >
+                  <label
+                    style={{
+                      color: 'var(--text-primary)',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
                     <span>🌳</span> ML Tree Settings
                   </label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', background: 'rgba(139, 92, 246, 0.07)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1.2rem',
+                      background: 'rgba(139, 92, 246, 0.07)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '1rem',
+                      border: '1px solid rgba(139, 92, 246, 0.2)',
+                    }}
+                  >
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>Select top-K candidates</label>
+                      <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>
+                        Select top-K candidates
+                      </label>
                       <span style={{ color: '#fff', fontWeight: 700 }}>{treeTopK}</span>
                     </div>
-                    <input type="range" min={10} max={2000} step={10} value={treeTopK} onChange={(e) => setTreeTopK(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }} />
+                    <input
+                      type="range"
+                      min={10}
+                      max={2000}
+                      step={10}
+                      value={treeTopK}
+                      onChange={(e) => setTreeTopK(parseInt(e.target.value))}
+                      style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }}
+                    />
                   </div>
                 </div>
               )}
 
               {screeningEngine === 'llm' && (
-                <div className="input-group" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.2rem', marginTop: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                    <label style={{ color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div
+                  className="input-group"
+                  style={{
+                    borderTop: '1px solid var(--border-subtle)',
+                    paddingTop: '1.2rem',
+                    marginTop: '0.5rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginBottom: '0.5rem',
+                    }}
+                  >
+                    <label
+                      style={{
+                        color: 'var(--text-primary)',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                      }}
+                    >
                       <span>🚀</span> Advanced Pipeline
                     </label>
-                    <button type="button" onClick={() => setUsePipeline((p) => !p)} aria-pressed={usePipeline} style={{ width: '52px', height: '28px', borderRadius: '14px', border: 'none', background: usePipeline ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'var(--surface-input)', cursor: 'pointer', position: 'relative' }}>
-                      <span style={{ position: 'absolute', top: '4px', left: usePipeline ? '26px' : '4px', width: '20px', height: '20px', borderRadius: '50%', background: '#fff', transition: 'left 0.25s' }} />
+                    <button
+                      type="button"
+                      onClick={() => setUsePipeline((p) => !p)}
+                      aria-pressed={usePipeline}
+                      style={{
+                        width: '52px',
+                        height: '28px',
+                        borderRadius: '14px',
+                        border: 'none',
+                        background: usePipeline
+                          ? 'linear-gradient(135deg, #8b5cf6, #ec4899)'
+                          : 'var(--surface-input)',
+                        cursor: 'pointer',
+                        position: 'relative',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '4px',
+                          left: usePipeline ? '26px' : '4px',
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: '#fff',
+                          transition: 'left 0.25s',
+                        }}
+                      />
                     </button>
                   </div>
                   {usePipeline && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', background: 'rgba(139, 92, 246, 0.07)', borderRadius: 'var(--radius-md)', padding: '1rem', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.2rem',
+                        background: 'rgba(139, 92, 246, 0.07)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '1rem',
+                        border: '1px solid rgba(139, 92, 246, 0.2)',
+                      }}
+                    >
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>Retrieve top-N</label>
+                        <label style={{ color: '#c4b5fd', fontSize: '0.82rem' }}>
+                          Retrieve top-N
+                        </label>
                         <span style={{ color: '#fff', fontWeight: 700 }}>{pipelineTopN}</span>
                       </div>
-                      <input type="range" min={50} max={1000} step={25} value={pipelineTopN} onChange={(e) => setPipelineTopN(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }} />
+                      <input
+                        type="range"
+                        min={50}
+                        max={1000}
+                        step={25}
+                        value={pipelineTopN}
+                        onChange={(e) => setPipelineTopN(parseInt(e.target.value))}
+                        style={{ width: '100%', accentColor: '#8b5cf6', cursor: 'pointer' }}
+                      />
 
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <label style={{ color: '#f9a8d4', fontSize: '0.82rem' }}>Rerank to top-K</label>
+                        <label style={{ color: '#f9a8d4', fontSize: '0.82rem' }}>
+                          Rerank to top-K
+                        </label>
                         <span style={{ color: '#fff', fontWeight: 700 }}>{pipelineTopK}</span>
                       </div>
-                      <input type="range" min={10} max={500} step={10} value={pipelineTopK} onChange={(e) => setPipelineTopK(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#ec4899', cursor: 'pointer' }} />
-                      
-                      <div style={{ display: 'flex', gap: '1rem', borderTop: '1px solid rgba(139,92,246,0.15)', paddingTop: '1rem' }}>
+                      <input
+                        type="range"
+                        min={10}
+                        max={500}
+                        step={10}
+                        value={pipelineTopK}
+                        onChange={(e) => setPipelineTopK(parseInt(e.target.value))}
+                        style={{ width: '100%', accentColor: '#ec4899', cursor: 'pointer' }}
+                      />
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: '1rem',
+                          borderTop: '1px solid rgba(139,92,246,0.15)',
+                          paddingTop: '1rem',
+                        }}
+                      >
                         <div style={{ flex: 1 }}>
-                          <label style={{ color: '#c4b5fd', fontSize: '0.82rem', fontWeight: 500, display: 'block', marginBottom: '0.4rem' }}>
+                          <label
+                            style={{
+                              color: '#c4b5fd',
+                              fontSize: '0.82rem',
+                              fontWeight: 500,
+                              display: 'block',
+                              marginBottom: '0.4rem',
+                            }}
+                          >
                             Min Experience (Years)
                           </label>
-                          <input type="number" value={pipelineMinExp} onChange={(e) => setPipelineMinExp(e.target.value === '' ? '' : parseInt(e.target.value))} min={0} max={50} placeholder="Auto extract" style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', border: '1px solid rgba(139,92,246,0.3)', color: '#fff', boxSizing: 'border-box', outline: 'none', fontSize: '0.85rem' }} />
+                          <input
+                            type="number"
+                            value={pipelineMinExp}
+                            onChange={(e) =>
+                              setPipelineMinExp(
+                                e.target.value === '' ? '' : parseInt(e.target.value),
+                              )
+                            }
+                            min={0}
+                            max={50}
+                            placeholder="Auto extract"
+                            style={{
+                              width: '100%',
+                              padding: '0.6rem',
+                              borderRadius: '0.5rem',
+                              background: 'rgba(15, 23, 42, 0.4)',
+                              border: '1px solid rgba(139,92,246,0.3)',
+                              color: '#fff',
+                              boxSizing: 'border-box',
+                              outline: 'none',
+                              fontSize: '0.85rem',
+                            }}
+                          />
                         </div>
                         <div style={{ flex: 1 }}>
-                          <label style={{ color: '#f9a8d4', fontSize: '0.82rem', fontWeight: 500, display: 'block', marginBottom: '0.4rem' }}>
+                          <label
+                            style={{
+                              color: '#f9a8d4',
+                              fontSize: '0.82rem',
+                              fontWeight: 500,
+                              display: 'block',
+                              marginBottom: '0.4rem',
+                            }}
+                          >
                             Max Experience (Years)
                           </label>
-                          <input type="number" value={pipelineMaxExp} onChange={(e) => setPipelineMaxExp(e.target.value === '' ? '' : parseInt(e.target.value))} min={0} max={50} placeholder="Auto extract" style={{ width: '100%', padding: '0.6rem', borderRadius: '0.5rem', background: 'rgba(15, 23, 42, 0.4)', border: '1px solid rgba(139,92,246,0.3)', color: '#fff', boxSizing: 'border-box', outline: 'none', fontSize: '0.85rem' }} />
+                          <input
+                            type="number"
+                            value={pipelineMaxExp}
+                            onChange={(e) =>
+                              setPipelineMaxExp(
+                                e.target.value === '' ? '' : parseInt(e.target.value),
+                              )
+                            }
+                            min={0}
+                            max={50}
+                            placeholder="Auto extract"
+                            style={{
+                              width: '100%',
+                              padding: '0.6rem',
+                              borderRadius: '0.5rem',
+                              background: 'rgba(15, 23, 42, 0.4)',
+                              border: '1px solid rgba(139,92,246,0.3)',
+                              color: '#fff',
+                              boxSizing: 'border-box',
+                              outline: 'none',
+                              fontSize: '0.85rem',
+                            }}
+                          />
                         </div>
                       </div>
                     </div>

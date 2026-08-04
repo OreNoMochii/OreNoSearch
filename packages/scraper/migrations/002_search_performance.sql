@@ -1,3 +1,15 @@
+-- ⚠️  SUPERSEDED — DO NOT RUN. See 003_search_indexes_only.sql.
+--
+-- This migration adds a STORED generated column to candidates_upgraded, which
+-- rewrites the table under an ACCESS EXCLUSIVE lock. The live table holds
+-- 5,661,466 rows / 9.4 GB, so that lock is measured in minutes, not seconds.
+--
+-- It is also unnecessary: the table already carries a generated experience
+-- column, and the correct total-experience semantics are served by an
+-- expression index in 003 without touching the table at all.
+--
+-- Retained only as a record of the analysis.
+
 -- 002_search_performance.sql
 --
 -- Query-plan work for candidates_upgraded (B14).
