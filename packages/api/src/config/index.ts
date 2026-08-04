@@ -44,6 +44,23 @@ const ConfigSchema = z
     DB_PASSWORD: z.string().min(1),
     DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
     DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().default(60_000),
+    /**
+     * Per-connection work_mem.
+     *
+     * The server default of 4MB is too small for this workload: a broad search
+     * builds a bitmap over millions of candidate rows, overflows work_mem and
+     * degrades to a LOSSY bitmap. Postgres then rechecks every tuple on those
+     * pages, re-running the plpgsql experience function per row.
+     *
+     * Measured: 9,390ms at 4MB -> 4,483ms at 64MB on the same query. 256MB
+     * gave no further improvement, so 64MB is the knee.
+     *
+     * Set per-connection rather than server-wide so it applies only to this
+     * application's pool.
+     */
+    DB_WORK_MEM: z.string().default('64MB'),
+    /** Upper bound on the reported match count. See runIlikeSearch. */
+    SEARCH_COUNT_CAP: z.coerce.number().int().min(100).max(100_000).default(2_000),
 
     // ── Meilisearch ────────────────────────────────────────────────────
     MEILI_URL: z.string().url(),

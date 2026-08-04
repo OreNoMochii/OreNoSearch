@@ -29,6 +29,15 @@ export const pool = new Pool({
 // Without this handler the default behaviour is an uncaught exception.
 pool.on('error', (err) => logError('pg_pool_error', err));
 
+// Applied once per physical connection, so every query in this pool gets it
+// without a round trip per statement. See config.DB_WORK_MEM for why the
+// server default is insufficient here.
+pool.on('connect', (client) => {
+  client
+    .query(`SET work_mem = '${config.DB_WORK_MEM}'`)
+    .catch((err: unknown) => logError('pg_set_work_mem_failed', err));
+});
+
 /** Drains the pool during graceful shutdown. */
 export async function shutdownPool(): Promise<void> {
   await pool.end();
@@ -541,8 +550,23 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // the campaign screened only 1,000 of them.
     //
     // Probing COUNT_CAP + 1 makes saturation detectable, so callers can render
-    // "10,000+" and refuse to treat it as an exact figure.
-    const COUNT_CAP = 10_000;
+    // "2,000+" and refuse to treat it as an exact figure.
+    //
+    // PERFORMANCE: the cap is the dominant cost of a search. Measured on the
+    // live 5.6M-row table with a broad query (engineer + Tokyo + 5-15 years):
+    //
+    //     cap  1,000 ->   597 ms
+    //     cap  2,000 ->   902 ms
+    //     cap  5,000 -> 2,195 ms
+    //     cap 10,000 -> 5,128 ms
+    //
+    // Roughly linear, because the executor must actually locate that many
+    // matching rows. 2,000 is the knee: it still tells a user "this query is
+    // too broad, narrow it" — which is all the figure is for — at under a fifth
+    // of the cost. It is safe to lower now that the outreach dispatch no longer
+    // derives its fetch limit from this value (B32).
+    const COUNT_CAP = config.SEARCH_COUNT_CAP;
+
     const countQuery = `
             SELECT count(*)::int AS n FROM (
                 SELECT 1
@@ -551,10 +575,6 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
                 LIMIT ${COUNT_CAP + 1}
             ) sub
         `;
-    const countRes = await client.query(countQuery, values);
-    const counted = countRes.rows[0].n as number;
-    const totalIsCapped = counted > COUNT_CAP;
-    const total = totalIsCapped ? COUNT_CAP : counted;
 
     const finalQuery = `
             SELECT
@@ -573,7 +593,20 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
             LIMIT $${paramIndex}
         `;
 
+    // Deliberately sequential on ONE pooled connection.
+    //
+    // Running these concurrently was tried and reverted. Measured at the
+    // current cap: the count costs ~1,037ms and the data query ~5ms, so
+    // overlapping them saves 0.5% of latency while taking two connections per
+    // search instead of one — halving how many searches the pool can serve at
+    // once. Not a trade worth making.
+    const countRes = await client.query(countQuery, values);
     const res = await client.query(finalQuery, [...values, params.limit]);
+
+    const counted = countRes.rows[0].n as number;
+    const totalIsCapped = counted > COUNT_CAP;
+    const total = totalIsCapped ? COUNT_CAP : counted;
+
     return { hits: res.rows, total, totalIsCapped, countCap: COUNT_CAP };
   } finally {
     client.release();
