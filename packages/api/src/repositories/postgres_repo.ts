@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { config } from '../config';
+import { toTsQueryPhrase } from '../core/tsquery';
 import { logError, logWarn } from '../utils/logger';
 
 /**
@@ -409,32 +410,6 @@ export interface IlikeSearchParams {
   excludeCompanies?: string[];
   currentRoleKeywords?: string[];
   limit: number;
-}
-
-/**
- * Reduces a user-supplied term to a phrase-matched tsquery lexeme sequence.
- *
- * B15: the previous version wrapped tokens in quotes but left the rest of the
- * string intact, so a term such as `!` or `&` reached the tsquery parser as an
- * operator and Postgres raised `syntax error in tsquery` — an unhandled 500.
- * Stripping everything outside [a-z0-9_] makes operators unrepresentable.
- *
- * Language names that would otherwise be destroyed by tokenisation are mapped
- * to sentinels first; the same substitutions are applied to the indexed
- * expression so both sides agree.
- */
-function toTsQueryPhrase(term: string): string {
-  const tokens = term
-    .toLowerCase()
-    .replace(/c\+\+/g, 'cpp_lang')
-    .replace(/c#/g, 'csharp_lang')
-    .replace(/\.net/g, 'dotnet_lang')
-    .replace(/f#/g, 'fsharp_lang')
-    .split(/[^a-z0-9_]+/)
-    .filter((t) => t.length > 0);
-
-  if (tokens.length === 0) return '';
-  return tokens.map((t) => `'${t}'`).join(' <-> ');
 }
 
 export async function runIlikeSearch(params: IlikeSearchParams) {

@@ -3,6 +3,7 @@ import type { gmail_v1 } from 'googleapis';
 import { config } from '../config';
 import { logInfo, logWarn, logError } from '../utils/logger';
 import fs from 'fs';
+import { parseAddressList, InvalidRecipientError } from '../core/email_address';
 import path from 'path';
 
 /**
@@ -11,14 +12,6 @@ import path from 'path';
  * comma, semicolon, colon, backslash) rather than trying to accept the full
  * grammar — this is an outbound allowlist, not a parser.
  */
-const ADDRESS_RE = /^[^\s@<>",;:\\]+@[^\s@<>",;:\\]+\.[^\s@<>",;:\\]{2,}$/;
-
-export class InvalidRecipientError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'InvalidRecipientError';
-  }
-}
 
 export class EmailService {
   private gmailClient: gmail_v1.Gmail | null = null;
@@ -58,36 +51,6 @@ export class EmailService {
   }
 
   /**
-   * Splits, trims and validates a comma-separated address list.
-   *
-   * SECURITY (B3): the raw value is rejected outright if it contains CR or
-   * LF. Recipients arrive from the request body and were previously spliced
-   * straight into RFC-822 headers, so a newline allowed an attacker to inject
-   * arbitrary headers (Bcc, Reply-To) or terminate the header block and forge
-   * a message body.
-   */
-  private parseAddressList(raw: string | undefined, field: string): string[] {
-    if (!raw) return [];
-
-    if (/[\r\n]/.test(raw)) {
-      throw new InvalidRecipientError(
-        `${field} contains a line break — refusing to construct headers`,
-      );
-    }
-
-    const addresses = raw
-      .split(',')
-      .map((a) => a.trim())
-      .filter(Boolean);
-
-    const invalid = addresses.filter((a) => !ADDRESS_RE.test(a));
-    if (invalid.length > 0) {
-      throw new InvalidRecipientError(`${field} contains ${invalid.length} invalid address(es)`);
-    }
-    return addresses;
-  }
-
-  /**
    * Sends a plain-text message via the Gmail API.
    * Returns false rather than throwing, so a delivery failure cannot mark a
    * batch of candidates as contacted.
@@ -102,8 +65,8 @@ export class EmailService {
     let toList: string[];
     let ccList: string[];
     try {
-      toList = this.parseAddressList(to, 'To');
-      ccList = this.parseAddressList(cc, 'Cc');
+      toList = parseAddressList(to, 'To');
+      ccList = parseAddressList(cc, 'Cc');
       if (toList.length === 0) {
         throw new InvalidRecipientError('To list is empty after validation');
       }
