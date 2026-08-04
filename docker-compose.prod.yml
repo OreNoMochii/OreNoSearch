@@ -1,10 +1,31 @@
+# Production stack.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Differences from the development docker-compose.yml:
+#   - datastores publish no host ports; they are reachable only on an internal
+#     network with no egress path
+#   - credentials come from Docker secrets, never from inline defaults
+#   - Meilisearch runs with MEILI_ENV=production
+#   - pgAdmin is absent (it shipped with admin@admin.com / admin)
+#   - application containers run unprivileged, read-only, with resource limits
+#
+# Requires ./secrets/*.txt (see DEPLOYMENT.md) and a .env supplying DB_NAME,
+# VECTOR_DB_NAME and ALLOWED_ORIGINS.
+
 name: metaview
 
 x-logging: &default-logging
   driver: json-file
-  options: { max-size: "10m", max-file: "3" }
+  options: { max-size: '10m', max-file: '3' }
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ['no-new-privileges:true']
 
 services:
+  # ── Data tier ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15.8-alpine
     environment:
@@ -14,10 +35,35 @@ services:
     secrets: [db_user, db_password]
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
-    networks: [backend]            # no host port — reachable only in-network
+      # Applied only on FIRST initialisation of an empty volume. An existing
+      # database is never touched — migrations there are run deliberately,
+      # out of band.
+      - ./packages/scraper/migrations:/docker-entrypoint-initdb.d:ro
+    networks: [backend] # no host port
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/db_user) -d ${DB_NAME}"]
+      test: ['CMD-SHELL', 'pg_isready -U "$$(cat /run/secrets/db_user)" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources: { limits: { cpus: '2.0', memory: 4G } }
+    logging: *default-logging
+    restart: unless-stopped
+
+  pgvector_search:
+    # Referenced by the retrieval service but previously undefined, so
+    # `compose up` failed on an unresolvable dependency.
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/vector_db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/vector_db_password
+      POSTGRES_DB: ${VECTOR_DB_NAME:?VECTOR_DB_NAME is required}
+    secrets: [vector_db_user, vector_db_password]
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$(cat /run/secrets/vector_db_user)"']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,65 +75,128 @@ services:
   meilisearch:
     image: getmeili/meilisearch:v1.6
     environment:
-      MEILI_MASTER_KEY_FILE: /run/secrets/meili_key   # no inline default
-      MEILI_ENV: production                            # was `development`
-      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY_FILE: /run/secrets/meili_key
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: 'true'
     secrets: [meili_key]
     volumes: [meilisearch_data:/meili_data]
     networks: [backend]
     healthcheck:
-      test: ["CMD", "meilisearch", "--help"]
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:7700/health || exit 1']
       interval: 15s
+      timeout: 5s
       retries: 4
+    deploy:
+      resources: { limits: { cpus: '2.0', memory: 2G } }
     logging: *default-logging
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    # Backs the durable campaign queue. appendonly keeps queued work across a
+    # restart, which is the reason the queue moved out of process memory.
+    # noeviction: dropping a queued campaign silently is worse than an error.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    volumes: [redis_data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources: { limits: { cpus: '1.0', memory: 1G } }
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ── Application tier ──────────────────────────────────────────────────────
   api:
-    build: { context: ./packages/api }
+    build:
+      # Context is the repository root: this is an npm workspace, so the
+      # lockfile and hoisted node_modules live there.
+      context: .
+      dockerfile: packages/api/Dockerfile
     environment:
       NODE_ENV: production
+      HOST: 0.0.0.0
       DB_HOST: postgres
       MEILI_URL: http://meilisearch:7700
+      REDIS_URL: redis://redis:6379
       RETRIEVAL_SERVICE_URL: http://retrieval:8765
-    secrets: [db_password, meili_key, api_pass, openai_key]
+      ML_SCORING_URL: http://retrieval:8000
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS is required in production}
+    env_file: [.env]
     depends_on:
-      postgres:    { condition: service_healthy }
+      postgres: { condition: service_healthy }
       meilisearch: { condition: service_healthy }
+      redis: { condition: service_healthy }
     networks: [backend, frontend]
-    read_only: true                      # writable state lives in tmpfs only
+    <<: *hardening
     tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
     deploy:
-      replicas: 2                        # safe only after §3.4 durable queue
+      # Safe at >1 only because the queue is durable in Redis and batch ids
+      # come from an atomic INCR. With the old in-memory queue each replica
+      # ran its own concurrency budget and double-sent.
+      replicas: 2
       resources: { limits: { cpus: '1.0', memory: 1G } }
     logging: *default-logging
     restart: unless-stopped
 
   retrieval:
-    build: { context: ./services/retrieval }
+    build:
+      context: ./services/retrieval
+      dockerfile: Dockerfile
     environment:
       DB_HOST: postgres
       VECTOR_DB_HOST: pgvector_search
       MEILI_URL: http://meilisearch:7700
+    env_file: [.env]
     depends_on:
-      postgres:        { condition: service_healthy }
+      postgres: { condition: service_healthy }
       pgvector_search: { condition: service_healthy }
     networks: [backend]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
     deploy:
-      resources: { limits: { cpus: '4.0', memory: 8G } }   # model residency
+      # Not replicated: the embedding and reranker models are multi-GB resident
+      # and each replica would load its own copy.
+      replicas: 1
+      resources: { limits: { cpus: '4.0', memory: 8G } }
+    logging: *default-logging
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    # nginx serves the SPA and proxies /api to the api service, so the browser
+    # makes same-origin requests and no search key reaches the client (B2).
+    # This is the only container that publishes a host port.
+    ports:
+      - '${WEB_PORT:-8080}:8080'
+    depends_on:
+      api: { condition: service_started }
+    networks: [frontend]
+    <<: *hardening
+    tmpfs: [/var/cache/nginx, /var/run]
+    deploy:
+      resources: { limits: { cpus: '0.5', memory: 256M } }
     logging: *default-logging
     restart: unless-stopped
 
 networks:
-  backend:  { internal: true }   # no egress path from the data tier
+  backend: { internal: true } # no egress path from the data tier
   frontend: {}
 
 secrets:
-  db_user:      { file: ./secrets/db_user.txt }
-  db_password:  { file: ./secrets/db_password.txt }
-  meili_key:    { file: ./secrets/meili_key.txt }
-  api_pass:     { file: ./secrets/api_pass.txt }
-  openai_key:   { file: ./secrets/openai_key.txt }
+  db_user: { file: ./secrets/db_user.txt }
+  db_password: { file: ./secrets/db_password.txt }
+  vector_db_user: { file: ./secrets/vector_db_user.txt }
+  vector_db_password: { file: ./secrets/vector_db_password.txt }
+  meili_key: { file: ./secrets/meili_key.txt }
 
-volumes: { postgres_data: {}, pgvector_data: {}, meilisearch_data: {} }
+volumes:
+  postgres_data:
+  pgvector_data:
+  meilisearch_data:
+  redis_data:

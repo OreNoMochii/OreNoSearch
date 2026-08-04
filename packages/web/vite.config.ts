@@ -14,6 +14,16 @@ export default defineConfig(({ mode }) => {
   const API_USER = env.API_USER || 'admin';
   const API_PASS = env.API_PASS || 'pass123';
 
+  // Load the dev TLS pair only if both files exist. Missing certs must
+  // degrade to plain HTTP for `vite dev`, never fail `vite build`.
+  const certDir = path.resolve(__dirname, '../../certs');
+  const keyPath = path.join(certDir, 'key.pem');
+  const certPath = path.join(certDir, 'cert.pem');
+  const devCerts =
+    fs.existsSync(keyPath) && fs.existsSync(certPath)
+      ? { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+      : undefined;
+
   return {
     // Load .env from the repo root so VITE_* vars (e.g. VITE_MEILI_KEY) are
     // available to client code without duplicating the file into frontend/.
@@ -43,7 +53,7 @@ export default defineConfig(({ mode }) => {
             res.setHeader('WWW-Authenticate', 'Basic realm="Metaview Scraper"');
             res.end('Authentication required.');
           });
-        }
+        },
       },
       {
         name: 'ip-whitelist',
@@ -57,8 +67,8 @@ export default defineConfig(({ mode }) => {
           // Addresses now come from DEV_ALLOWED_IPS rather than being hardcoded.
           const allowed = new Set(
             ['127.0.0.1', '::1', ...(env.DEV_ALLOWED_IPS || '').split(',')]
-              .map(ip => ip.trim())
-              .filter(Boolean)
+              .map((ip) => ip.trim())
+              .filter(Boolean),
           );
 
           /** Unwraps ::ffff:1.2.3.4 to 1.2.3.4; leaves genuine IPv6 intact. */
@@ -73,18 +83,18 @@ export default defineConfig(({ mode }) => {
             const remoteAddr = req.socket.remoteAddress || '';
             const ip = normalise(remoteAddr);
 
-            if (ip !== null && allowed.has(ip)) return next();   // exact match only
+            if (ip !== null && allowed.has(ip)) return next(); // exact match only
 
             console.warn(`[ip-whitelist] blocked ${remoteAddr}`);
             res.statusCode = 403;
             res.end('<h1>403 Forbidden</h1><p>Access denied: your IP is not allowed.</p>');
           });
-        }
-      }
+        },
+      },
     ],
     build: {
       target: 'es2022',
-      sourcemap: 'hidden',              // uploaded to error tracking, not served
+      sourcemap: 'hidden', // uploaded to error tracking, not served
       cssCodeSplit: true,
       reportCompressedSize: false,
       chunkSizeWarningLimit: 500,
@@ -95,22 +105,24 @@ export default defineConfig(({ mode }) => {
     // so runtime diagnostics still surface in production.
     server: {
       host: '0.0.0.0',
-      https: {
-        key: fs.readFileSync(path.resolve(__dirname, '../../certs/key.pem')),
-        cert: fs.readFileSync(path.resolve(__dirname, '../../certs/cert.pem')),
-      },
+      // B36: these are dev-only self-signed certs, but the reads ran at
+      // config-load time — so `vite build` failed anywhere they were absent
+      // (a container image, CI, a fresh clone). Production terminates TLS at
+      // nginx or the ingress and never needs them, so HTTPS is now enabled
+      // only when the pair is actually on disk.
+      https: devCerts,
       proxy: {
         '/meilisearch': {
           target: 'http://127.0.0.1:7705',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/meilisearch/, '')
+          rewrite: (path) => path.replace(/^\/meilisearch/, ''),
         },
         '/api': {
           target: 'http://127.0.0.1:3001',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, '/api') // Keep /api prefix for the backend
-        }
-      }
-    }
+          rewrite: (path) => path.replace(/^\/api/, '/api'), // Keep /api prefix for the backend
+        },
+      },
+    },
   };
 });

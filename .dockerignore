@@ -1,0 +1,19 @@
+# Build context is the repo root; keep it small and secret-free.
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+certs/
+secrets/
+token.json
+client_secret*.json
+machine_learning/artifacts
+machine_learning/notebooks
+machine_learning/scratch
+coverage
+**/*.test.ts
