@@ -1,8 +1,7 @@
 {
-  "name": "metaview_scraper",
+  "name": "@metaview/api",
   "version": "1.0.0",
-  "description": "",
-  "main": "src/main.ts",
+  "description": "Express API, screening and outreach services",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
@@ -15,8 +14,6 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest run"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
@@ -59,5 +56,6 @@
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
-  }
+  },
+  "private": true
 }

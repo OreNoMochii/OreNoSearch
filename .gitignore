@@ -55,25 +55,12 @@ dom_analysis.json
 /machine_learning/src/pipeline_results_fixed.txt
 
 # ─── Scratch / one-shot developer scripts ───────────────────────────────────
+# NOTE: scripts/dev/ IS tracked — those are maintained tools, not scratch.
 /machine_learning/scratch/
 /scratch/
 scratch_*.js
-explain_search.js
-search_db.js
-test_api.js
-test_search.js
-test_search.ts
 query_candidates*.js
 list_tables.js
-
-# ─── Dead files kept on disk but deliberately untracked ─────────────────────
-# App.css is the unmodified Vite starter stylesheet and is imported nowhere
-# (main.tsx imports only index.css). The .ht* pair is Apache config in a Vite
-# SPA, with .htpasswd containing a placeholder hash rather than a real one.
-# Safe to delete outright; ignored here so `git status` stays quiet.
-/frontend/src/App.css
-/frontend/public/.htaccess
-/frontend/public/.htpasswd
 
 # ─── Databases & dumps ──────────────────────────────────────────────────────
 *.sqlite

@@ -38,8 +38,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: package-lock.json
+      # Workspace root install — hoists shared deps for every package.
       - run: npm ci
+        working-directory: .
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
       - name: Lint
@@ -64,8 +66,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
+        working-directory: .
       - name: Typecheck
         run: npx tsc -b --force
       - name: Lint

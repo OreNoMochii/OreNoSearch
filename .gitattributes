@@ -1,0 +1,23 @@
+# ── Model weights via Git LFS ───────────────────────────────────────────────
+# These are regenerated on every training run. Left in regular git they add a
+# full copy of each artifact to history per run — 4.5 MB today, but linear in
+# the number of retrains, and every clone pays for all of it forever.
+#
+# LFS stores a pointer in git and the blob out of band, so history stays small
+# and only the checked-out revision is fetched.
+#
+# NOTE: blobs committed BEFORE this file existed remain in normal git object
+# storage. That is deliberate — converting them requires rewriting history, and
+# 4.5 MB is not worth a rewrite. Everything committed from here on uses LFS.
+machine_learning/artifacts/*.joblib   filter=lfs diff=lfs merge=lfs -text
+machine_learning/artifacts/*.pt       filter=lfs diff=lfs merge=lfs -text
+machine_learning/artifacts/*.npy      filter=lfs diff=lfs merge=lfs -text
+machine_learning/artifacts/*.pkl      filter=lfs diff=lfs merge=lfs -text
+machine_learning/artifacts/*.onnx     filter=lfs diff=lfs merge=lfs -text
+
+# ── Line endings ────────────────────────────────────────────────────────────
+* text=auto eol=lf
+*.sh   text eol=lf
+*.png  binary
+*.jpg  binary
+*.pdf  binary
