@@ -14,7 +14,6 @@ machine_learning/artifacts/*.pt       filter=lfs diff=lfs merge=lfs -text
 machine_learning/artifacts/*.npy      filter=lfs diff=lfs merge=lfs -text
 machine_learning/artifacts/*.pkl      filter=lfs diff=lfs merge=lfs -text
 machine_learning/artifacts/*.onnx     filter=lfs diff=lfs merge=lfs -text
-
 # ── Line endings ────────────────────────────────────────────────────────────
 * text=auto eol=lf
 *.sh   text eol=lf
