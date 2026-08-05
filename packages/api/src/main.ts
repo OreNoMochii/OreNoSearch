@@ -85,6 +85,7 @@ const authLimiter = rateLimit({
   limit: 30,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  skipSuccessfulRequests: true,
   message: { error: 'Too many authentication attempts' },
 });
 
