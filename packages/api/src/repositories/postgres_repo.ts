@@ -653,14 +653,10 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // derives its fetch limit from this value (B32).
     const COUNT_CAP = config.SEARCH_COUNT_CAP;
 
-    const countQuery = `
-            SELECT count(*)::int AS n FROM (
-                SELECT 1
-                FROM candidates_upgraded
-                ${whereClause}
-                LIMIT ${COUNT_CAP + 1}
-            ) sub
-        `;
+    // We use EXPLAIN to get a blazing-fast estimate of the total matching rows
+    // (which represents the "whole figures" for the UI) without running a full 
+    // sequence scan that could take >60s and time out the API.
+    const explainQuery = `EXPLAIN SELECT 1 FROM candidates_upgraded ${whereClause}`;
 
     const finalQuery = `
             SELECT ${CANDIDATE_PROJECTION}
@@ -669,22 +665,21 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
             LIMIT $${paramIndex}
         `;
 
-    // Deliberately sequential on ONE pooled connection.
-    //
-    // Running these concurrently was tried and reverted. Measured at the
-    // current cap: the count costs ~1,037ms and the data query ~5ms, so
-    // overlapping them saves 0.5% of latency while taking two connections per
-    // search instead of one — halving how many searches the pool can serve at
-    // once. Not a trade worth making.
-    //
     // skipCount drops the count entirely for callers that never read it.
-    const counted = params.skipCount
-      ? 0
-      : ((await client.query(countQuery, values)).rows[0].n as number);
+    let counted = 0;
+    if (!params.skipCount) {
+      const explainRes = await client.query(explainQuery, values);
+      const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
+      const match = plan.match(/rows=(\d+)/);
+      counted = match ? parseInt(match[1], 10) : 0;
+    }
+
     const res = await client.query(finalQuery, [...values, params.limit]);
 
-    const totalIsCapped = counted > COUNT_CAP;
-    const total = totalIsCapped ? COUNT_CAP : counted;
+    // We no longer cap the total so the UI can display the whole figure.
+    // Setting totalIsCapped to false ensures the UI just prints the number.
+    const total = counted;
+    const totalIsCapped = false;
 
     return { hits: res.rows, total, totalIsCapped, countCap: COUNT_CAP };
   } finally {
