@@ -657,6 +657,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // (which represents the "whole figures" for the UI) without running a full 
     // sequence scan that could take >60s and time out the API.
     const explainQuery = `EXPLAIN SELECT 1 FROM candidates_upgraded ${whereClause}`;
+    const exactCountBoundedQuery = `SELECT count(*)::int AS n FROM (SELECT 1 FROM candidates_upgraded ${whereClause} LIMIT 10000) sub`;
 
     const finalQuery = `
             SELECT ${CANDIDATE_PROJECTION}
@@ -668,10 +669,22 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // skipCount drops the count entirely for callers that never read it.
     let counted = 0;
     if (!params.skipCount) {
-      const explainRes = await client.query(explainQuery, values);
-      const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
-      const match = plan.match(/rows=(\d+)/);
-      counted = match ? parseInt(match[1], 10) : 0;
+      // First try to count up to 10000 accurately. This takes <300ms for broad queries.
+      const exactRes = await client.query(exactCountBoundedQuery, values);
+      const exactCount = exactRes.rows[0].n;
+      
+      if (exactCount < 10000) {
+        // Perfectly accurate count!
+        counted = exactCount;
+      } else {
+        // Over 10k, so use the statistical estimate to give the huge number instantly.
+        const explainRes = await client.query(explainQuery, values);
+        const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
+        const match = plan.match(/rows=(\d+)/);
+        const estimate = match ? parseInt(match[1], 10) : 0;
+        // The estimate might be smaller than 10000 due to planner inaccuracies, so we floor it to 10000
+        counted = Math.max(estimate, 10000);
+      }
     }
 
     const res = await client.query(finalQuery, [...values, params.limit]);
