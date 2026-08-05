@@ -197,6 +197,15 @@ async function gatherTermSets(
   return Promise.all(promises);
 }
 
+/**
+ * Set algebra over the per-term result sets.
+ *
+ * Every iteration here reads a Set directly. The previous code wrapped each one
+ * in `Array.from(...)` before iterating, allocating a full copy of a set that
+ * can hold `perTermLimit` (5,000) ids per term — megabytes of short-lived
+ * garbage per search, for no benefit: a Set is already iterable and none of
+ * these loops mutate the set being read.
+ */
 export function combineSets(
   shouldSets: Set<string>[],
   mustSets: Set<string>[],
@@ -207,7 +216,7 @@ export function combineSets(
   if (shouldSets.length > 0) {
     working = new Set<string>();
     for (const s of shouldSets) {
-      for (const item of Array.from(s)) {
+      for (const item of s) {
         working.add(item);
       }
     }
@@ -224,10 +233,12 @@ export function combineSets(
     }
 
     for (const s of mustSets) {
-      // Intersect: only keep items present in 's'
+      // Intersect: only keep items present in 's'. Iterating the smaller of the
+      // two sets does the same work in fewer lookups.
       const nextWorking = new Set<string>();
-      for (const item of Array.from(working)) {
-        if (s.has(item)) nextWorking.add(item);
+      const [smaller, larger] = working.size <= s.size ? [working, s] : [s, working];
+      for (const item of smaller) {
+        if (larger.has(item)) nextWorking.add(item);
       }
       working = nextWorking;
     }
@@ -240,12 +251,12 @@ export function combineSets(
   if (mustNotSets.length > 0) {
     const forbidden = new Set<string>();
     for (const s of mustNotSets) {
-      for (const item of Array.from(s)) {
+      for (const item of s) {
         forbidden.add(item);
       }
     }
     const filtered = new Set<string>();
-    for (const item of Array.from(working)) {
+    for (const item of working) {
       if (!forbidden.has(item)) filtered.add(item);
     }
     working = filtered;
@@ -314,7 +325,7 @@ export async function runBooleanSearch(query: SearchQuery): Promise<{
     for (const groupSets of groupResults) {
       const unionSet = new Set<string>();
       for (const s of groupSets) {
-        for (const item of Array.from(s)) unionSet.add(item);
+        for (const item of s) unionSet.add(item);
       }
       // Always push the unionSet, even if empty, so an empty AND group correctly zeroes the results.
       mustSets.push(unionSet);

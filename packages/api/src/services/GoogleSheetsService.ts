@@ -454,32 +454,55 @@ export class GoogleSheetsService {
       });
 
       const rows = res.data.values || [];
-      const updates: { range: string; values: any[][] }[] = [];
 
+      // Collect the row numbers that need a value, then write ONE contiguous
+      // D:F block spanning them.
+      //
+      // This previously pushed a separate {range} entry per matching row into a
+      // single batchUpdate: Google bills and rate-limits on range count, so a
+      // few thousand rows produced a few thousand ranges in one request, which
+      // is routinely rejected outright — and the whole call is wrapped in a
+      // catch that only logs, so the failure was silent.
+      const touched = new Map<number, string[]>(); // 0-based row index -> D,E,F
       for (let i = 1; i < rows.length; i++) {
         // skip header
         const url = rows[i][6]; // Column G = Profile URL
         const risk = riskData[url];
         if (risk && (rows[i][3] === 'N/A' || !rows[i][3])) {
           // Column D = Move Prob
-          updates.push({
-            range: `Candidates!D${i + 1}:F${i + 1}`,
-            values: [
-              [(risk.move_prob * 100).toFixed(2), risk.hazard.toFixed(2), risk.tenure.toFixed(1)],
-            ],
-          });
+          touched.set(i, [
+            (risk.move_prob * 100).toFixed(2),
+            risk.hazard.toFixed(2),
+            risk.tenure.toFixed(1),
+          ]);
         }
       }
 
-      if (updates.length > 0) {
-        await this.sheets!.spreadsheets.values.batchUpdate({
+      if (touched.size > 0) {
+        const indices = [...touched.keys()];
+        const first = Math.min(...indices);
+        const last = Math.max(...indices);
+
+        // Rows inside the span that we are not updating echo their current
+        // values back, so an untouched row is left exactly as it was.
+        const block: string[][] = [];
+        for (let i = first; i <= last; i++) {
+          block.push(
+            touched.get(i) ?? [
+              String(rows[i]?.[3] ?? ''),
+              String(rows[i]?.[4] ?? ''),
+              String(rows[i]?.[5] ?? ''),
+            ],
+          );
+        }
+
+        await this.sheets!.spreadsheets.values.update({
           spreadsheetId,
-          requestBody: {
-            valueInputOption: 'RAW',
-            data: updates,
-          },
+          range: `Candidates!D${first + 1}:F${last + 1}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: block },
         });
-        await logDebug(`  [GSheets] Backfilled risk scores for ${updates.length} candidates.`);
+        await logDebug(`  [GSheets] Backfilled risk scores for ${touched.size} candidates.`);
       }
     } catch (err: any) {
       await logDebug(`  [GSheets] Error backfilling risk scores: ${err.message}`);

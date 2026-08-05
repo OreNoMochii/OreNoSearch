@@ -69,8 +69,12 @@ async def _audit_one(
     ]
 
     async with sem:
+        raw = ""
         try:
-            loop = asyncio.get_event_loop()
+            # get_running_loop, not get_event_loop: the latter is deprecated
+            # inside a coroutine and can create a fresh loop rather than
+            # returning the running one.
+            loop = asyncio.get_running_loop()
             raw = await loop.run_in_executor(
                 None, lambda: chat(messages, model=model, max_tokens=1024)
             )

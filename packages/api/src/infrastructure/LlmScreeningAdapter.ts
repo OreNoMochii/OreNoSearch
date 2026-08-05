@@ -9,7 +9,7 @@ import {
 import type { CompanyIntel } from '../repositories/postgres_repo';
 import { screeningAgent } from '../services/ScreeningAgent';
 import { logInfo, logError, logWarn, logSkipped } from '../utils/logger';
-import { saveScreeningResult, getCompanyIntelBatch } from '../repositories/postgres_repo';
+import { saveScreeningResultsBatch, getCompanyIntelBatch } from '../repositories/postgres_repo';
 
 export class LlmScreeningAdapter implements ScreeningStrategy {
   readonly name = 'llm';
@@ -104,32 +104,17 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
 
             if (rateLimited) return { status: 'rate_limited' as const, candidate };
 
-            if (isMatch) {
-              await saveScreeningResult(
-                candidate.profileUrl,
-                opts.companyName,
-                opts.jobName,
-                'PASS',
+            // The verdict is persisted once per wave rather than once per
+            // candidate — see the batch write below.
+            if (!isMatch) void logSkipped(candidate, 'Verification Agent', reasoning);
+            return {
+              status: 'success' as const,
+              result: {
+                profileUrl: candidate.profileUrl,
+                verdict: isMatch ? ('PASS' as const) : ('REJECT' as const),
                 reasoning,
-              );
-              return {
-                status: 'success' as const,
-                result: { profileUrl: candidate.profileUrl, verdict: 'PASS' as const, reasoning },
-              };
-            } else {
-              await saveScreeningResult(
-                candidate.profileUrl,
-                opts.companyName,
-                opts.jobName,
-                'REJECT',
-                reasoning,
-              );
-              void logSkipped(candidate, 'Verification Agent', reasoning);
-              return {
-                status: 'success' as const,
-                result: { profileUrl: candidate.profileUrl, verdict: 'REJECT' as const, reasoning },
-              };
-            }
+              },
+            };
           } catch (err) {
             logError('candidate_screening_failed', err as Error, { name: candidate.name });
             return { status: 'error' as const, candidate };
@@ -143,10 +128,25 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
         (r) => r.status === 'fulfilled' && r.value.status === 'rate_limited',
       );
 
+      const waveVerdicts: ScreeningResult[] = [];
       for (const r of waveResults) {
-        if (r.status === 'fulfilled' && r.value.status === 'success' && r.value.result) {
+        if (r.status === 'fulfilled' && r.value.status === 'success') {
           finalResults.push(r.value.result);
+          waveVerdicts.push(r.value.result);
         }
+      }
+
+      // One statement per wave instead of one per candidate. A failure here
+      // costs re-screening on the next run, so it is logged rather than thrown.
+      if (waveVerdicts.length > 0) {
+        await saveScreeningResultsBatch(waveVerdicts, opts.companyName, opts.jobName).catch(
+          (err: unknown) => {
+            logWarn('llm_verdict_persist_failed', {
+              count: waveVerdicts.length,
+              message: (err as Error).message,
+            });
+          },
+        );
       }
 
       if (waveRateLimited) {

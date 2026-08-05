@@ -92,14 +92,32 @@ async function syncPostgresToMeili() {
 
     console.log('Fetching candidates in batches and adding to Meilisearch...');
     const BATCH_SIZE = 5000;
-    let offset = 0;
     let batchNumber = 1;
+    let synced = 0;
 
-    while (offset < totalCandidates) {
-      const res = await client.query(`SELECT * FROM candidates_upgraded LIMIT $1 OFFSET $2`, [
-        BATCH_SIZE,
-        offset,
-      ]);
+    // Keyset pagination on the primary key, not LIMIT/OFFSET.
+    //
+    // OFFSET makes Postgres produce and discard every row before the offset, so
+    // walking a 5.66M-row table 5,000 at a time scanned roughly N^2/2B rows in
+    // total — about 3.2 billion row-visits to return 5.66 million. Each batch is
+    // now an index range scan of exactly BATCH_SIZE rows.
+    //
+    // The explicit column list replaces SELECT *: scraped_at aside, every column
+    // below is actually indexed into Meilisearch, and the wildcard dragged
+    // whatever else the table happens to carry across the wire.
+    let cursor = '';
+
+    for (;;) {
+      const res = await client.query(
+        `SELECT profile_url, name, email, headline, current_company, latest_role,
+                experience, location, skills, summary, phone_number, education,
+                language, licenses, scraped_at
+         FROM   candidates_upgraded
+         WHERE  profile_url > $1
+         ORDER  BY profile_url
+         LIMIT  $2`,
+        [cursor, BATCH_SIZE],
+      );
       const candidates = res.rows;
 
       if (candidates.length === 0) break;
@@ -127,12 +145,16 @@ async function syncPostgresToMeili() {
 
       const task = await index.addDocuments(documents);
       console.log(
-        `Submitted batch ${batchNumber} of ${Math.ceil(totalCandidates / BATCH_SIZE)} (Task UID: ${task.taskUid}, Records: ${offset + 1} - ${offset + candidates.length})`,
+        `Submitted batch ${batchNumber} of ~${Math.ceil(totalCandidates / BATCH_SIZE)} ` +
+          `(Task UID: ${task.taskUid}, Records: ${synced + 1} - ${synced + candidates.length})`,
       );
 
-      offset += BATCH_SIZE;
+      synced += candidates.length;
+      cursor = candidates[candidates.length - 1].profile_url as string;
       batchNumber++;
     }
+
+    console.log(`Submitted ${synced} candidates across ${batchNumber - 1} batches.`);
 
     console.log('--- Document Submission successful! ---');
     console.log('Indexing tasks submitted to Meilisearch.');

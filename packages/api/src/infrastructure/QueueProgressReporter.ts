@@ -1,5 +1,5 @@
 import type { ProgressReporter } from '../domain/ports';
-import { recordBatchProgress } from '../controllers/OutreachController';
+import { recordBatchProgress, recordBatchSize } from '../controllers/OutreachController';
 
 /**
  * Reports batch progress to the BullMQ job.
@@ -11,5 +11,9 @@ import { recordBatchProgress } from '../controllers/OutreachController';
 export class QueueProgressReporter implements ProgressReporter {
   report(batchId: number | undefined, delta = 1): void {
     recordBatchProgress(batchId, delta);
+  }
+
+  setTotal(batchId: number | undefined, total: number): void {
+    recordBatchSize(batchId, total);
   }
 }

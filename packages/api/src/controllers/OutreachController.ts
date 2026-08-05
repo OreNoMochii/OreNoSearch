@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { logInfo, logError } from '../utils/logger';
 import { OutreachRequest } from '../core/schemas';
+import type { CandidateSpec } from '../domain/ports';
 import { BullBatchQueue, type OutreachJobData } from '../infrastructure/BullBatchQueue';
 import { getRedis, isRedisAvailable } from '../infrastructure/redis';
 
@@ -28,12 +29,31 @@ export class OutreachController {
     }
     const body = parsed.data;
 
-    // The candidate list may legitimately be empty for pipeline and tree
-    // engines, which source candidates themselves.
+    // How the campaign names its candidate set, in precedence order. The rows
+    // themselves are resolved in the worker (see PostgresCandidateSource) —
+    // posting them was what made a large campaign a multi-hundred-megabyte
+    // request that the body parser rejected anyway.
+    const candidateSpec: CandidateSpec = body.searchParams
+      ? { kind: 'search', params: body.searchParams }
+      : body.candidateUrls && body.candidateUrls.length > 0
+        ? { kind: 'urls', urls: body.candidateUrls }
+        : { kind: 'inline', rows: body.candidates };
+
+    const candidateCount =
+      candidateSpec.kind === 'urls'
+        ? candidateSpec.urls.length
+        : candidateSpec.kind === 'inline'
+          ? candidateSpec.rows.length
+          : 0; // unknown until the worker runs the search
+
+    // A candidate set may legitimately be empty for pipeline and tree engines,
+    // which source candidates themselves.
     const needsCandidates = !body.usePipeline && body.screeningEngine === 'llm';
-    if (needsCandidates && body.candidates.length === 0) {
+    if (needsCandidates && candidateSpec.kind === 'inline' && candidateSpec.rows.length === 0) {
       return res.status(400).json({
-        error: "The 'llm' screening engine requires a non-empty 'candidates' array",
+        error:
+          "The 'llm' screening engine requires a candidate set: send 'searchParams', " +
+          "'candidateUrls' or a non-empty 'candidates' array",
       });
     }
 
@@ -55,7 +75,8 @@ export class OutreachController {
 
       logInfo('outreach_requested', {
         batchId,
-        candidateCount: body.candidates.length,
+        candidateSource: candidateSpec.kind,
+        candidateCount,
         model: targetModel,
         engine: body.screeningEngine,
         pipeline: body.usePipeline,
@@ -63,7 +84,8 @@ export class OutreachController {
 
       const jobData: OutreachJobData = {
         jdText: body.jd,
-        uiCandidates: body.candidates,
+        candidateSpec,
+        candidateCount,
         companyName: body.companyName,
         jobName: body.jobName,
         recipients: body.email,
@@ -137,4 +159,10 @@ export function recordBatchProgress(batchId: number | undefined, delta = 1): voi
   void bullQueue
     .reportProgress(batchId, delta)
     .catch((err) => logError('progress_report_failed', err));
+}
+
+/** Publishes the resolved candidate total for a batch. Advisory: never throws. */
+export function recordBatchSize(batchId: number | undefined, total: number): void {
+  if (batchId === undefined) return;
+  void bullQueue.setBatchSize(batchId, total).catch((err) => logError('batch_size_failed', err));
 }

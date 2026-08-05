@@ -88,6 +88,15 @@ const ConfigSchema = z
     // ── Outreach behaviour ─────────────────────────────────────────────
     OUTREACH_BLOCKED_RECIPIENTS: csv().default([]),
     MAX_CONCURRENT_BATCHES: z.coerce.number().int().min(1).max(20).default(3),
+    /**
+     * Hard bound on how many candidates one campaign may screen.
+     *
+     * Applied server-side when the candidate set is resolved, so a caller
+     * cannot widen it. The UI used to supply its own `limit: 100000` and post
+     * the resulting rows back; the bound now lives on the machine that pays
+     * for it.
+     */
+    MAX_CAMPAIGN_CANDIDATES: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
 
     // ── API auth ───────────────────────────────────────────────────────
     API_USER: z.string().min(3),

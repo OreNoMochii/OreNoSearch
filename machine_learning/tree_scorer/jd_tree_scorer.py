@@ -489,8 +489,80 @@ def run(jd_text, top_k=30):
     return ranked, model, imp
 
 
+SUFFIXES = re.compile(
+    r"\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?"
+    r"|group|holdings|japan|international|global)\b",
+    re.I,
+)
+
+# Columns build_features reads. Any that the caller did not send are created
+# empty rather than raising KeyError halfway through feature engineering.
+_FEATURE_COLUMNS = (
+    "name", "profile_url", "headline", "location", "current_company",
+    "summary", "experience", "education", "latest_role",
+)
+
+# Aliases the caller may use instead of the canonical name. Covers both the
+# SQL search projection (ai_latest_*) and the orchestrator's camelCase
+# ScreenedCandidate shape.
+_COLUMN_ALIASES = {
+    "name":            ("full_name",),
+    "profile_url":     ("profileUrl", "resume_drive_view_url", "folder_id"),
+    "headline":        ("ai_latest_role",),
+    "location":        ("ai_latest_location",),
+    "current_company": ("ai_latest_company", "currentCompany"),
+    "summary":         ("candidate_summary",),
+    "experience":      ("resume_text_excerpt",),
+    "latest_role":     ("ai_latest_role", "latestRole"),
+}
+
+
+def _normalise_ui_frame(candidates_raw: list) -> pd.DataFrame:
+    """Coerce an inbound candidate list into the frame build_features expects."""
+    df = pd.DataFrame(candidates_raw)
+    df = df.reset_index(drop=True)
+
+    for canonical in _FEATURE_COLUMNS:
+        if canonical in df.columns:
+            continue
+        for alias in _COLUMN_ALIASES.get(canonical, ()):
+            if alias in df.columns:
+                df[canonical] = df[alias]
+                break
+        else:
+            df[canonical] = ""
+
+    for col in _FEATURE_COLUMNS:
+        df[col] = df[col].fillna("").astype(str)
+
+    return df
+
+
 def run_json():
-    # 1. Read JSON payload from stdin
+    """
+    Score an inbound candidate list against a JD.
+
+    WHY THERE IS NO MODEL HERE ANY MORE
+    ───────────────────────────────────
+    This function used to, on every single screening request: open a fresh
+    psycopg2 connection, pull 15,000 rows of resume text into pandas, run
+    row-wise feature engineering over all of them, and fit a
+    GradientBoostingClassifier from scratch — before scoring a single one of the
+    candidates it was actually asked about. Tens of seconds of CPU per campaign,
+    repeated in full for every campaign.
+
+    The labels that model was fitted to came from `make_labels`, which is a
+    deterministic arithmetic function of the very feature matrix the model was
+    given. The GBM was being trained to approximate a rule the code already
+    computes exactly, so the fetch and the fit bought nothing but latency and a
+    small amount of smoothing.
+
+    The rule score is now used directly. Selection semantics are preserved: the
+    labels thresholded `s` at its 88th percentile (top 12% pass), so the score
+    is mapped through a logistic centred on that same percentile. A candidate
+    who would have been labelled PASS scores above 0.5, which is what
+    TREE_PASS_THRESHOLD in the TypeScript adapter tests.
+    """
     input_data = sys.stdin.read()
     if not input_data:
         return json.dumps({"error": "No input provided"})
@@ -499,77 +571,49 @@ def run_json():
     except Exception as e:
         return json.dumps({"error": f"Invalid JSON: {str(e)}"})
 
-    jd_text = payload.get("jd", "")
-    company_name = payload.get("companyName", "").lower()
+    jd_text        = payload.get("jd", "")
+    company_name   = (payload.get("companyName") or "").lower()
     candidates_raw = payload.get("candidates", [])
-    top_k = payload.get("topK", 1000)
-    
-    # 2. Fit model on historical data (or load pre-trained if we wanted, but fitting is fast)
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        df_hist = pd.read_sql_query(
-            "SELECT name,profile_url,headline,location,current_company,summary,experience,education,latest_role "
-            "FROM candidates_data_science_use LIMIT 15000", conn)
-        conn.close()
-    except Exception as e:
-        return json.dumps({"error": f"Failed DB connect: {str(e)}"})
+    top_k          = payload.get("topK", 1000)
 
     if not candidates_raw:
-        df_ui = df_hist.copy()
-    else:
-        df_ui = pd.DataFrame(candidates_raw)
-        # Map common ui candidate fields if necessary
-        if "full_name" in df_ui.columns and "name" not in df_ui.columns: df_ui["name"] = df_ui["full_name"]
-        if "ai_latest_role" in df_ui.columns and "latest_role" not in df_ui.columns: df_ui["latest_role"] = df_ui["ai_latest_role"]
-        if "ai_latest_company" in df_ui.columns and "current_company" not in df_ui.columns: df_ui["current_company"] = df_ui["ai_latest_company"]
-        if "ai_latest_location" in df_ui.columns and "location" not in df_ui.columns: df_ui["location"] = df_ui["ai_latest_location"]
+        return json.dumps({"status": "success", "candidates": []})
 
-    jd = parse_jd(jd_text)
-    
-    # Feature eng for historical
-    feats_hist = build_features(df_hist, jd)
-    labels_hist, _ = make_labels(feats_hist, jd)
-    X_hist = feats_hist.replace([np.inf,-np.inf], np.nan).fillna(0).values
+    df_ui = _normalise_ui_frame(candidates_raw)
+    jd    = parse_jd(jd_text)
 
-    model = GradientBoostingClassifier(
-        n_estimators=100, max_depth=4, learning_rate=0.1,
-        min_samples_leaf=10, random_state=42)
-    model.fit(X_hist, labels_hist)
-    
-    # 3. Predict on UI candidates
-    feats_ui = build_features(df_ui, jd)
-    X_ui = feats_ui.replace([np.inf,-np.inf], np.nan).fillna(0).values
-    probas = model.predict_proba(X_ui)[:,1]
-    
-    results = []
-    
-    # Same company generic suffix remover
-    suffixes = re.compile(r"\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?|group|holdings|japan|international|global)\b", re.I)
-    canonical_company = suffixes.sub("", company_name).strip()
-    
-    for i, row in df_ui.iterrows():
-        score = float(probas[i])
-        
-        # Same company filter
-        cc = str(row.get("current_company", "")).lower()
-        cc_clean = suffixes.sub("", cc).strip()
-        
-        if len(canonical_company) >= 3 and len(cc_clean) >= 3:
-            if canonical_company in cc_clean or cc_clean in canonical_company:
-                score = 0.0 # Exclude them
-                
-        results.append({
-            "name": row.get("name", ""),
-            "profile_url": row.get("profile_url", ""),
-            "tree_score": score,
-            "lang_infer_score": int(feats_ui["lang_infer"].iloc[i]),
-            "current_company": cc
-        })
-        
-    # Sort and return candidates (up to top K)
-    results = sorted(results, key=lambda x: x["tree_score"], reverse=True)[:top_k]
-        
-    return json.dumps({"status": "success", "candidates": results})
+    feats = build_features(df_ui, jd)
+    _, raw_scores = make_labels(feats, jd)
+    raw_scores = np.asarray(raw_scores, dtype=float)
+
+    # Logistic centred on the same cut-off make_labels used for its PASS label,
+    # so 0.5 keeps its meaning. Scale by the batch spread so the curve is not
+    # arbitrarily steep or flat for a given JD.
+    midpoint = float(np.percentile(raw_scores, 88))
+    scale    = max(float(raw_scores.std()), 1e-6)
+    scores   = 1.0 / (1.0 + np.exp(-(raw_scores - midpoint) / scale))
+
+    # Same-company exclusion, vectorised. Was a per-row regex substitution
+    # inside an iterrows loop.
+    companies = df_ui["current_company"].str.lower()
+    canonical = SUFFIXES.sub("", company_name).strip()
+    if len(canonical) >= 3:
+        cc_clean = companies.str.replace(SUFFIXES, "", regex=True).str.strip()
+        same_company = (cc_clean.str.len() >= 3) & (
+            cc_clean.str.contains(re.escape(canonical), regex=True)
+            | cc_clean.apply(lambda c: len(c) >= 3 and c in canonical)
+        )
+        scores = np.where(same_company.to_numpy(), 0.0, scores)
+
+    out = pd.DataFrame({
+        "name":             df_ui["name"],
+        "profile_url":      df_ui["profile_url"],
+        "tree_score":       scores,
+        "lang_infer_score": feats["lang_infer"].astype(int).to_numpy(),
+        "current_company":  companies,
+    }).nlargest(int(top_k), "tree_score")
+
+    return json.dumps({"status": "success", "candidates": out.to_dict("records")})
 
 
 if __name__ == "__main__":

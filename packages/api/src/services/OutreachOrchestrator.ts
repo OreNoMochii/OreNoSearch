@@ -1,10 +1,15 @@
 import {
   CandidateSink,
+  CandidateSource,
+  CandidateSpec,
   OutreachHistoryRepository,
   OutreachNotifier,
+  ProgressReporter,
+  RawCandidateRow,
   RiskScorer,
   ScreenedCandidate,
   ScreeningStrategy,
+  nullProgressReporter,
 } from '../domain/ports';
 import { logInfo, logError, logWarn, logSkipped } from '../utils/logger';
 import { config } from '../config';
@@ -15,7 +20,11 @@ const BLOCKED_RECIPIENTS = new Set(config.OUTREACH_BLOCKED_RECIPIENTS.map((e) =>
 
 export interface OutreachCommand {
   readonly jdText: string;
-  readonly uiCandidates: readonly any[];
+  /**
+   * How to obtain the candidate set. Resolved here, in the worker, rather than
+   * being carried through the browser and the job payload.
+   */
+  readonly candidateSpec: CandidateSpec;
   readonly companyName: string;
   readonly jobName: string;
   readonly recipients: string;
@@ -47,16 +56,21 @@ export class OutreachOrchestrator {
     private readonly sink: CandidateSink,
     private readonly notifier: OutreachNotifier,
     private readonly history: OutreachHistoryRepository,
+    private readonly candidateSource: CandidateSource,
+    private readonly progress: ProgressReporter = nullProgressReporter,
   ) {}
 
-  private normaliseCandidates(input: readonly any[]): ScreenedCandidate[] {
+  private normaliseCandidates(input: readonly RawCandidateRow[]): ScreenedCandidate[] {
+    const str = (v: unknown, fallback: string): string =>
+      typeof v === 'string' && v.length > 0 ? v : fallback;
+
     return input.map((c) => ({
-      profileUrl: c.profile_url ?? c.resume_drive_view_url ?? 'N/A',
-      name: c.name ?? c.full_name ?? 'Unknown',
-      currentCompany: c.current_company ?? c.ai_latest_company ?? 'N/A',
-      location: c.location ?? c.ai_latest_location ?? 'N/A',
-      headline: c.headline ?? c.ai_latest_role ?? 'N/A',
-      email: c.email ?? 'No Email Found',
+      profileUrl: str(c.profile_url ?? c.resume_drive_view_url, 'N/A'),
+      name: str(c.name ?? c.full_name, 'Unknown'),
+      currentCompany: str(c.current_company ?? c.ai_latest_company, 'N/A'),
+      location: str(c.location ?? c.ai_latest_location, 'N/A'),
+      headline: str(c.headline ?? c.ai_latest_role, 'N/A'),
+      email: str(c.email, 'No Email Found'),
     }));
   }
 
@@ -106,10 +120,16 @@ export class OutreachOrchestrator {
       .map((e) => e.trim())
       .filter((e) => e !== '' && !BLOCKED_RECIPIENTS.has(e.toLowerCase()));
 
-    let candidates = this.excludeSameCompany(
-      this.normaliseCandidates(cmd.uiCandidates),
-      cmd.companyName,
-    );
+    // Resolve the candidate set here rather than accepting it over HTTP.
+    let rows: readonly RawCandidateRow[];
+    try {
+      rows = await this.candidateSource.resolve(cmd.candidateSpec, config.MAX_CAMPAIGN_CANDIDATES);
+    } catch (err) {
+      logError('candidate_resolution_failed', err, { batchId: cmd.batchId });
+      return;
+    }
+
+    let candidates = this.excludeSameCompany(this.normaliseCandidates(rows), cmd.companyName);
 
     if (candidates.length === 0 && cmd.screening.engine === 'llm') return;
 
@@ -121,6 +141,12 @@ export class OutreachOrchestrator {
         : new Set<string>();
 
     candidates = candidates.filter((c) => !alreadySent.has(c.profileUrl));
+
+    // Published after filtering, so the progress denominator is what will
+    // actually be screened. The enqueuing client cannot know this figure when
+    // the server resolves the candidate set, so without this the UI progress
+    // bar would have no denominator at all.
+    this.progress.setTotal(cmd.batchId, candidates.length);
 
     // Screen
     const results = await strategy.screen(cmd.jdText, candidates, {
@@ -141,12 +167,17 @@ export class OutreachOrchestrator {
     const passedUrls = passed.map((p) => p.profileUrl);
     const riskData = await this.riskScorer.score(passedUrls, cmd.jdText);
 
-    // Gather candidates that passed for sinking
-    // If pipeline, we might have full candidate data in result._fullCandidateData
-    const passedCandidates = passed.map((p) => {
-      const original = candidates.find((c) => c.profileUrl === p.profileUrl);
-      return original ?? { profileUrl: p.profileUrl, name: 'Unknown' };
-    });
+    // Gather candidates that passed for sinking.
+    //
+    // Indexed once rather than scanned per result: this was
+    // `candidates.find(...)` inside a map, so with the tree engine's 2,000
+    // passing candidates over a 100,000-row pool it ran up to 2x10^8 string
+    // comparisons on the event loop, blocking every other request in the
+    // process.
+    const byUrl = new Map(candidates.map((c) => [c.profileUrl, c]));
+    const passedCandidates = passed.map(
+      (p) => byUrl.get(p.profileUrl) ?? { profileUrl: p.profileUrl, name: 'Unknown' },
+    );
 
     // Publish
     const sinkResult = await this.sink.publish({

@@ -309,24 +309,45 @@ export async function getSentCandidatesBatch(
   }
 }
 
-export async function saveScreeningResult(
-  profileUrl: string,
+/**
+ * Records screening verdicts — one statement for the whole batch.
+ *
+ * Replaces a single-row `saveScreeningResult` that the tree engine called once
+ * per candidate inside a Promise.all: up to `treeTopK` (2,000) concurrent
+ * pool.connect() calls, each taking one of the DB_POOL_MAX connections that the
+ * search path shares. A campaign therefore monopolised the pool, and concurrent
+ * searches queued behind it until pg-pool's connectionTimeoutMillis fired. This
+ * is one connection and one round trip regardless of batch size.
+ *
+ * Pass a single-element array for a single verdict; there is deliberately no
+ * one-row variant left to reach for.
+ */
+export async function saveScreeningResultsBatch(
+  results: readonly { profileUrl: string; verdict: 'PASS' | 'REJECT'; reasoning?: string }[],
   companyName: string,
   jobName: string,
-  verdict: 'PASS' | 'REJECT',
-  reasoning?: string,
-) {
+): Promise<number> {
+  if (results.length === 0) return 0;
+
   const client = await pool.connect();
   try {
-    const query = `
-            INSERT INTO screening_results (profile_url, company_name, job_name, verdict, reasoning)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (profile_url, company_name, job_name) DO UPDATE SET
-                verdict = EXCLUDED.verdict,
-                reasoning = EXCLUDED.reasoning,
-                screened_at = CURRENT_TIMESTAMP
-        `;
-    await client.query(query, [profileUrl, companyName, jobName, verdict, reasoning || null]);
+    const res = await client.query(
+      `INSERT INTO screening_results (profile_url, company_name, job_name, verdict, reasoning)
+       SELECT r.url, $3, $4, r.verdict, r.reasoning
+       FROM   unnest($1::text[], $2::text[], $5::text[]) AS r(url, verdict, reasoning)
+       ON CONFLICT (profile_url, company_name, job_name) DO UPDATE SET
+         verdict     = EXCLUDED.verdict,
+         reasoning   = EXCLUDED.reasoning,
+         screened_at = CURRENT_TIMESTAMP`,
+      [
+        results.map((r) => r.profileUrl),
+        results.map((r) => r.verdict),
+        companyName,
+        jobName,
+        results.map((r) => r.reasoning ?? null),
+      ],
+    );
+    return res.rowCount ?? 0;
   } finally {
     client.release();
   }
@@ -419,6 +440,65 @@ export interface IlikeSearchParams {
   excludeCompanies?: string[];
   currentRoleKeywords?: string[];
   limit: number;
+  /**
+   * Skips the bounded COUNT probe.
+   *
+   * The count exists to tell a human "this query is too broad" and is the
+   * dominant cost of a search (see COUNT_CAP below). A campaign resolving its
+   * candidate set never reads `total`, so paying for it there is pure waste.
+   */
+  skipCount?: boolean;
+}
+
+/**
+ * The candidate projection the UI and the screening engines expect.
+ *
+ * Shared by runIlikeSearch and getCandidatesByUrl so a campaign resolved by
+ * hydration is byte-identical to one resolved by search — normaliseCandidates
+ * reads these aliases.
+ */
+const CANDIDATE_PROJECTION = `
+                profile_url as folder_id,
+                name as full_name,
+                profile_url as resume_drive_view_url,
+                latest_role as ai_latest_role,
+                location as ai_latest_location,
+                current_company as ai_latest_company,
+                summary as candidate_summary,
+                experience as resume_text_excerpt,
+                education,
+                skills`;
+
+/**
+ * Hydrates full candidate rows from a list of profile URLs.
+ *
+ * Used by the Meilisearch campaign path, where the boolean set algebra runs in
+ * the browser but the documents themselves have no business being posted back:
+ * profile_url is the primary key, so this is an index scan.
+ */
+export async function getCandidatesByUrl(
+  profileUrls: readonly string[],
+): Promise<Record<string, unknown>[]> {
+  if (profileUrls.length === 0) return [];
+
+  const client = await pool.connect();
+  try {
+    const rows: Record<string, unknown>[] = [];
+    // Chunked so neither the bind parameter nor the result set is unbounded.
+    const CHUNK = 10_000;
+    for (let i = 0; i < profileUrls.length; i += CHUNK) {
+      const res = await client.query(
+        `SELECT ${CANDIDATE_PROJECTION}
+         FROM candidates_upgraded
+         WHERE profile_url = ANY($1::text[])`,
+        [profileUrls.slice(i, i + CHUNK)],
+      );
+      rows.push(...res.rows);
+    }
+    return rows;
+  } finally {
+    client.release();
+  }
 }
 
 export async function runIlikeSearch(params: IlikeSearchParams) {
@@ -583,17 +663,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
         `;
 
     const finalQuery = `
-            SELECT
-                profile_url as folder_id,
-                name as full_name,
-                profile_url as resume_drive_view_url,
-                latest_role as ai_latest_role,
-                location as ai_latest_location,
-                current_company as ai_latest_company,
-                summary as candidate_summary,
-                experience as resume_text_excerpt,
-                education,
-                skills
+            SELECT ${CANDIDATE_PROJECTION}
             FROM candidates_upgraded
             ${whereClause}
             LIMIT $${paramIndex}
@@ -606,10 +676,13 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // overlapping them saves 0.5% of latency while taking two connections per
     // search instead of one — halving how many searches the pool can serve at
     // once. Not a trade worth making.
-    const countRes = await client.query(countQuery, values);
+    //
+    // skipCount drops the count entirely for callers that never read it.
+    const counted = params.skipCount
+      ? 0
+      : ((await client.query(countQuery, values)).rows[0].n as number);
     const res = await client.query(finalQuery, [...values, params.limit]);
 
-    const counted = countRes.rows[0].n as number;
     const totalIsCapped = counted > COUNT_CAP;
     const total = totalIsCapped ? COUNT_CAP : counted;
 
@@ -714,8 +787,10 @@ async function queryAvailableLocations(): Promise<string[]> {
             ORDER BY total DESC;
         `;
     const res = await client.query(query);
-    cachedLocations = res.rows.map((r) => r.display_location).sort();
-    return cachedLocations;
+    // Deliberately does NOT assign cachedLocations here: getAvailableLocations
+    // owns the cache and bumps cachedAt with it. Writing from both places made
+    // a failed refresh briefly visible as a fresh one.
+    return res.rows.map((r) => r.display_location as string).sort();
   } finally {
     client.release();
   }
