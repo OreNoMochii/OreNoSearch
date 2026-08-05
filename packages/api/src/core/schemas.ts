@@ -114,7 +114,7 @@ export const SqlSearchRequest = z.object({
   must: z.array(z.string().max(200)).max(50).default([]),
   should: z.array(z.string().max(200)).max(50).default([]),
   mustNot: z.array(z.string().max(200)).max(50).default([]),
-  locations: z.array(z.string().max(200)).max(100).default([]),
+  locations: z.array(z.string().max(200)).max(1000).default([]),
   limit: z.number().int().min(1).max(100_000).default(25),
   minExp: z.number().int().min(0).max(60).optional(),
   maxExp: z.number().int().min(0).max(60).optional(),
