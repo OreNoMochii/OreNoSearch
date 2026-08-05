@@ -105,30 +105,6 @@ const emailList = z
     'Must be a comma-separated list of valid email addresses',
   );
 
-/**
- * POST /api/outreach body.
- * Replaces roughly twenty lines of hand-rolled clamping in OutreachController.
- */
-export const OutreachRequest = z.object({
-  candidates: z.array(CandidateInput).max(100_000).default([]),
-  jd: z.string().min(20).max(200_000),
-  email: emailList,
-  jobName: z.string().min(1).max(255),
-  companyName: z.string().min(1).max(255),
-  model: z.string().max(200).optional(),
-  adjacentRoles: z.string().max(4000).optional(),
-  bypassDeduplication: z.boolean().default(false),
-  useCompanyIntel: z.boolean().default(true),
-  usePipeline: z.boolean().default(false),
-  screeningEngine: z.enum(['llm', 'tree', 'tree_llm']).default('llm'),
-  topN: z.number().int().min(50).max(1000).default(700),
-  topK: z.number().int().min(10).max(500).default(300),
-  treeTopK: z.number().int().min(10).max(2000).default(1000),
-  minExp: z.number().int().min(0).max(60).optional(),
-  maxExp: z.number().int().min(0).max(60).optional(),
-});
-export type OutreachRequest = z.infer<typeof OutreachRequest>;
-
 /** POST /api/search body. */
 export const SqlSearchRequest = z.object({
   andGroups: z
@@ -146,6 +122,59 @@ export const SqlSearchRequest = z.object({
   currentRoleKeywords: z.array(z.string().max(200)).max(50).optional(),
 });
 export type SqlSearchRequest = z.infer<typeof SqlSearchRequest>;
+
+/**
+ * The search that defines a campaign's candidate set.
+ *
+ * Deliberately the search request minus `limit`: the campaign's own bound is
+ * config.MAX_CAMPAIGN_CANDIDATES, applied server-side. Letting the caller send
+ * a limit here is how the UI previously ended up asking for 100,000 rows and
+ * then posting them all back.
+ */
+export const CampaignSearchParams = SqlSearchRequest.omit({ limit: true });
+export type CampaignSearchParams = z.infer<typeof CampaignSearchParams>;
+
+/**
+ * POST /api/outreach body.
+ * Replaces roughly twenty lines of hand-rolled clamping in OutreachController.
+ *
+ * A campaign names its candidate set in one of three ways, in this precedence:
+ *
+ *   1. `searchParams` — the server re-runs the search itself. The rows never
+ *      leave the datacentre.
+ *   2. `candidateUrls` — profile URLs only; the server hydrates the rows from
+ *      Postgres. Used by the Meilisearch path, whose set algebra runs in the
+ *      browser.
+ *   3. `candidates` — inline rows, for small hand-picked sets.
+ *
+ * `candidates` used to be the only option and allowed 100,000 rows carrying up
+ * to 50,000 characters of `experience` each. That payload was serialised in the
+ * browser, posted, re-parsed, and then persisted verbatim into Redis as the job
+ * body — and anything past roughly 10 MB was rejected outright by the body
+ * parser, so large campaigns failed after all that work. It is now capped at a
+ * size that is genuinely hand-picked.
+ */
+export const OutreachRequest = z.object({
+  searchParams: CampaignSearchParams.optional(),
+  candidateUrls: z.array(z.string().max(500)).max(100_000).optional(),
+  candidates: z.array(CandidateInput).max(1_000).default([]),
+  jd: z.string().min(20).max(200_000),
+  email: emailList,
+  jobName: z.string().min(1).max(255),
+  companyName: z.string().min(1).max(255),
+  model: z.string().max(200).optional(),
+  adjacentRoles: z.string().max(4000).optional(),
+  bypassDeduplication: z.boolean().default(false),
+  useCompanyIntel: z.boolean().default(true),
+  usePipeline: z.boolean().default(false),
+  screeningEngine: z.enum(['llm', 'tree', 'tree_llm']).default('llm'),
+  topN: z.number().int().min(50).max(1000).default(700),
+  topK: z.number().int().min(10).max(500).default(300),
+  treeTopK: z.number().int().min(10).max(2000).default(1000),
+  minExp: z.number().int().min(0).max(60).optional(),
+  maxExp: z.number().int().min(0).max(60).optional(),
+});
+export type OutreachRequest = z.infer<typeof OutreachRequest>;
 
 /** POST /api/meili/search body — the browser-facing Meilisearch proxy (B2). */
 export const MeiliProxyRequest = z.object({

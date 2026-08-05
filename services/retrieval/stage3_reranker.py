@@ -17,13 +17,36 @@ Key improvements over naive reranking:
 import re
 import threading
 import asyncio
+import datetime
 import os
 import pathlib
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from config import RERANKER_MODEL
 
 _lock = threading.Lock()
 _reranker = None
+
+# Dedicated single-worker pool for cross-encoder inference.
+#
+# Reranking previously ran on asyncio's default executor, which has up to
+# min(32, cpu+4) workers. Two concurrent /search requests therefore ran two full
+# inference passes over the *same* model object at once: they contended for the
+# same cores (or the same GPU stream), so both finished later than if they had
+# been serialised, and peak memory doubled. One worker means one pass at a time,
+# queued rather than interleaved.
+_rerank_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
+
+# Batch size for CrossEncoder.predict. Was left to the library default
+# regardless of how many pairs Stage 2 handed over.
+_RERANK_BATCH_SIZE = 32
+
+# Generic company-name suffixes, stripped before same-employer comparison.
+_GENERIC_SUFFIXES = re.compile(
+    r'\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?'
+    r'|group|holdings|japan|international|global)\b',
+    re.IGNORECASE,
+)
 
 
 def _get_reranker():
@@ -122,7 +145,6 @@ def _estimate_years_from_experience(exp_text: str) -> float:
     if not exp_text:
         return 0.0
 
-    import datetime
     current_year = datetime.datetime.now().year
 
     # Find year patterns: "2018 - 2023", "2018 – Present", "Jan 2018 - Dec 2023"
@@ -338,20 +360,21 @@ def _rerank_sync(
         return []
 
     # ── Step 0: Filter out existing employees ────────────────────────────────
+    # _GENERIC_SUFFIXES is compiled once at module scope; this pattern was
+    # previously written out inline and re-resolved on every candidate.
     if company_name:
-        import re
-        company_clean = re.sub(r'\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?|group|holdings|japan|international|global)\b', '', company_name.lower(), flags=re.IGNORECASE).strip()
+        company_clean = _GENERIC_SUFFIXES.sub('', company_name.lower()).strip()
         if len(company_clean) >= 3:
             company_tokens = [company_clean] + [t.strip() for t in company_clean.split() if len(t.strip()) >= 4]
             filtered = []
             for c in candidates:
                 cand_comp = (c.get("current_company") or "").lower()
-                cand_comp_clean = re.sub(r'\b(inc\.?|ltd\.?|llc\.?|corp\.?|co\.?|gmbh|株式会社|k\.k\.?|s\.a\.?|b\.v\.?|plc\.?|pty\.?|group|holdings|japan|international|global)\b', '', cand_comp, flags=re.IGNORECASE).strip()
-                
+                cand_comp_clean = _GENERIC_SUFFIXES.sub('', cand_comp).strip()
+
                 is_match = False
                 if len(cand_comp_clean) >= 3:
                     is_match = any(t in cand_comp_clean or cand_comp_clean in t for t in company_tokens)
-                
+
                 if is_match:
                     print(f"  [Stage3] Filtered {c.get('name')} (already at {c.get('current_company')})")
                     continue
@@ -363,7 +386,7 @@ def _rerank_sync(
 
     # ── Step 1: Cross-encoder scoring ────────────────────────────────────────
     pairs = [(jd_text, _build_text_blob(c)) for c in candidates]
-    scores = reranker.predict(pairs, show_progress_bar=False)
+    scores = reranker.predict(pairs, batch_size=_RERANK_BATCH_SIZE, show_progress_bar=False)
 
     scored = [
         {**cand, "reranker_score": float(score)}
@@ -445,9 +468,9 @@ async def rerank(
         expansion:  Stage 1 ontology dict (used for post-scoring adjustments)
         company_name: Optional hiring company name to filter out existing employees
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        None, _rerank_sync, jd_text, candidates, top_k, expansion, company_name
+        _rerank_pool, _rerank_sync, jd_text, candidates, top_k, expansion, company_name
     )
     print(f"  [Stage3] Reranked {len(candidates)} → top-{len(result)}")
     return result

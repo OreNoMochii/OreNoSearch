@@ -148,10 +148,14 @@ const server = app.listen(config.PORT, config.HOST, () => {
   // this write is why the client previously carried an admin key (B2).
   void initMeiliSettings().catch((err) => logError('meili_settings_init_failed', err));
 
-  // Warm the location cache. The aggregate scans 5.6M rows and takes ~23s
-  // cold, and /api/locations blocks the filter UI on first paint — without
-  // this the first user after every boot and every cache expiry waits that
-  // long. Fired without await so it does not delay readiness.
+  // Warm the location cache.
+  //
+  // Since migration 006 this reads a 19,003-row materialised snapshot rather
+  // than aggregating 5.6M rows, so a cold load is ~240ms rather than ~23s. The
+  // warm-up is kept because /api/locations still blocks the filter UI on first
+  // paint, and because it surfaces a missing matview in the logs at boot rather
+  // than on a user's first request. Fired without await so it does not delay
+  // readiness.
   void (async () => {
     const startedAt = Date.now();
     try {

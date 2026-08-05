@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import psycopg2
 import psycopg2.extras
+from psycopg2.extras import execute_values
 from tqdm import tqdm
 from config import GOLDEN_DB, VECTOR_DB
 from embedder import embed_batch
@@ -44,6 +45,60 @@ def build_text_blob(row: dict) -> str:
         (row.get("education") or "")[:200],
     ]
     return " | ".join(p for p in parts if p and str(p).strip() != "N/A")
+
+
+_UPSERT_SQL = """
+    INSERT INTO candidate_embeddings
+        (profile_url, name, headline, summary_text, text_blob, embedding)
+    VALUES %s
+    ON CONFLICT (profile_url) DO UPDATE SET
+        name         = EXCLUDED.name,
+        headline     = EXCLUDED.headline,
+        summary_text = EXCLUDED.summary_text,
+        text_blob    = EXCLUDED.text_blob,
+        embedding    = EXCLUDED.embedding,
+        updated_at   = NOW()
+"""
+
+
+def flush_batch(vec_cur, vec_conn, batch: list) -> int:
+    """
+    Embed one batch and upsert it in a single statement.
+
+    The blob is built ONCE and reused for both the embedding input and the
+    stored column; the previous code called build_text_blob a second time per
+    row while assembling the INSERT, doubling that work. The upsert was also one
+    execute() per row — now one execute_values round trip per batch.
+    """
+    blobs = [build_text_blob(dict(r)) for r in batch]
+
+    try:
+        embeddings = embed_batch(blobs, batch_size=len(blobs))
+    except Exception as e:
+        print(f"\n  ⚠️  Embedding error on a batch of {len(batch)}: {e}")
+        return 0
+
+    rows = [
+        (
+            r["profile_url"],
+            (r.get("name") or "")[:500],
+            (r.get("headline") or "")[:500],
+            (r.get("summary") or "")[:2000],
+            blob[:3000],
+            "[" + ",".join(str(v) for v in emb) + "]",
+        )
+        for r, blob, emb in zip(batch, blobs, embeddings)
+    ]
+
+    execute_values(
+        vec_cur,
+        _UPSERT_SQL,
+        rows,
+        template="(%s, %s, %s, %s, %s, %s::vector)",
+        page_size=len(rows),
+    )
+    vec_conn.commit()
+    return len(rows)
 
 
 def get_already_ingested(vec_conn) -> set:
@@ -101,75 +156,60 @@ def main():
         already_done = get_already_ingested(vec_conn)
         print(f"  → {len(already_done)} profiles already in vector DB (will skip)")
 
-    # ── Fetch from golden DB (READ-ONLY) ───────────────────────────────────
-    print(f"\n[3/4] Loading candidates from golden DB (table: {args.table})...")
-    golden_cur = golden_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # ── Stream from golden DB (READ-ONLY) ──────────────────────────────────
+    #
+    # A NAMED cursor is a server-side cursor: rows arrive `itersize` at a time
+    # instead of all at once. The previous code called fetchall() on an
+    # unbounded SELECT, materialising every profile — summary, experience,
+    # skills and education for millions of rows — as Python dicts before a
+    # single embedding was computed. That is gigabytes of resident memory and
+    # the reason this script could not complete on the full table.
+    print(f"\n[3/4] Streaming candidates from golden DB (table: {args.table})...")
+    golden_cur = golden_conn.cursor(
+        name="ingest_stream",
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+    golden_cur.itersize = max(args.batch_size, 1000)
     golden_cur.execute(
         f"SELECT profile_url, name, headline, current_company, location, "
         f"summary, experience, skills, education FROM {args.table} "
         f"WHERE profile_url IS NOT NULL AND name IS NOT NULL"
     )
-    all_rows = golden_cur.fetchall()
-    golden_cur.close()
-    golden_conn.close()
-    print(f"  → {len(all_rows)} total profiles fetched")
-
-    # Filter to only unprocessed
-    rows_to_process = [r for r in all_rows if r["profile_url"] not in already_done]
-    print(f"  → {len(rows_to_process)} profiles to embed")
-
-    if not rows_to_process:
-        print("\n✓ Nothing to do — all profiles are already embedded!")
-        vec_conn.close()
-        return
 
     # ── Batch embed + upsert ────────────────────────────────────────────────
     print(f"\n[4/4] Embedding in batches of {args.batch_size}...")
     vec_cur = vec_conn.cursor()
 
     total_inserted = 0
-    for i in tqdm(range(0, len(rows_to_process), args.batch_size),
-                  desc="Embedding batches", unit="batch"):
-        batch = rows_to_process[i : i + args.batch_size]
-        texts = [build_text_blob(dict(r)) for r in batch]
+    scanned = 0
+    batch: list = []
+    progress = tqdm(desc="Embedding", unit="profile")
 
-        try:
-            embeddings = embed_batch(texts, batch_size=len(texts))
-        except Exception as e:
-            print(f"\n  ⚠️  Embedding error on batch {i//args.batch_size}: {e}")
-            continue
+    try:
+        for row in golden_cur:
+            scanned += 1
+            if row["profile_url"] in already_done:
+                continue
 
-        for row, emb in zip(batch, embeddings):
-            url   = row["profile_url"]
-            name  = (row.get("name") or "")[:500]
-            head  = (row.get("headline", "") or "")[:500]
-            summ  = (row.get("summary", "") or "")[:2000]
-            blob  = build_text_blob(dict(row))[:3000]
-            vec_str = "[" + ",".join(str(v) for v in emb) + "]"
+            batch.append(row)
+            if len(batch) < args.batch_size:
+                continue
 
-            vec_cur.execute(
-                """
-                INSERT INTO candidate_embeddings
-                    (profile_url, name, headline, summary_text, text_blob, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s::vector)
-                ON CONFLICT (profile_url) DO UPDATE SET
-                    name         = EXCLUDED.name,
-                    headline     = EXCLUDED.headline,
-                    summary_text = EXCLUDED.summary_text,
-                    text_blob    = EXCLUDED.text_blob,
-                    embedding    = EXCLUDED.embedding,
-                    updated_at   = NOW()
-                """,
-                (url, name, head, summ, blob, vec_str),
-            )
-            total_inserted += 1
+            total_inserted += flush_batch(vec_cur, vec_conn, batch)
+            progress.update(len(batch))
+            batch = []
 
-        vec_conn.commit()
+        if batch:
+            total_inserted += flush_batch(vec_cur, vec_conn, batch)
+            progress.update(len(batch))
+    finally:
+        progress.close()
+        golden_cur.close()
+        golden_conn.close()
+        vec_cur.close()
+        vec_conn.close()
 
-    vec_cur.close()
-    vec_conn.close()
-
-    print(f"\n✅ Done! Embedded and upserted {total_inserted} profiles.")
+    print(f"\n✅ Done! Scanned {scanned} profiles, embedded and upserted {total_inserted}.")
     print(f"   Vector DB is ready for semantic search at port {VECTOR_DB['port']}.")
 
 

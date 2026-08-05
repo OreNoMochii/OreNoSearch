@@ -1,7 +1,7 @@
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { config } from '../config';
 import { toTsQueryPhrase } from '../core/tsquery';
-import { logError, logWarn } from '../utils/logger';
+import { logError, logInfo, logWarn } from '../utils/logger';
 
 /**
  * Connection pool for the golden database.
@@ -309,24 +309,45 @@ export async function getSentCandidatesBatch(
   }
 }
 
-export async function saveScreeningResult(
-  profileUrl: string,
+/**
+ * Records screening verdicts — one statement for the whole batch.
+ *
+ * Replaces a single-row `saveScreeningResult` that the tree engine called once
+ * per candidate inside a Promise.all: up to `treeTopK` (2,000) concurrent
+ * pool.connect() calls, each taking one of the DB_POOL_MAX connections that the
+ * search path shares. A campaign therefore monopolised the pool, and concurrent
+ * searches queued behind it until pg-pool's connectionTimeoutMillis fired. This
+ * is one connection and one round trip regardless of batch size.
+ *
+ * Pass a single-element array for a single verdict; there is deliberately no
+ * one-row variant left to reach for.
+ */
+export async function saveScreeningResultsBatch(
+  results: readonly { profileUrl: string; verdict: 'PASS' | 'REJECT'; reasoning?: string }[],
   companyName: string,
   jobName: string,
-  verdict: 'PASS' | 'REJECT',
-  reasoning?: string,
-) {
+): Promise<number> {
+  if (results.length === 0) return 0;
+
   const client = await pool.connect();
   try {
-    const query = `
-            INSERT INTO screening_results (profile_url, company_name, job_name, verdict, reasoning)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (profile_url, company_name, job_name) DO UPDATE SET
-                verdict = EXCLUDED.verdict,
-                reasoning = EXCLUDED.reasoning,
-                screened_at = CURRENT_TIMESTAMP
-        `;
-    await client.query(query, [profileUrl, companyName, jobName, verdict, reasoning || null]);
+    const res = await client.query(
+      `INSERT INTO screening_results (profile_url, company_name, job_name, verdict, reasoning)
+       SELECT r.url, $3, $4, r.verdict, r.reasoning
+       FROM   unnest($1::text[], $2::text[], $5::text[]) AS r(url, verdict, reasoning)
+       ON CONFLICT (profile_url, company_name, job_name) DO UPDATE SET
+         verdict     = EXCLUDED.verdict,
+         reasoning   = EXCLUDED.reasoning,
+         screened_at = CURRENT_TIMESTAMP`,
+      [
+        results.map((r) => r.profileUrl),
+        results.map((r) => r.verdict),
+        companyName,
+        jobName,
+        results.map((r) => r.reasoning ?? null),
+      ],
+    );
+    return res.rowCount ?? 0;
   } finally {
     client.release();
   }
@@ -419,6 +440,65 @@ export interface IlikeSearchParams {
   excludeCompanies?: string[];
   currentRoleKeywords?: string[];
   limit: number;
+  /**
+   * Skips the bounded COUNT probe.
+   *
+   * The count exists to tell a human "this query is too broad" and is the
+   * dominant cost of a search (see COUNT_CAP below). A campaign resolving its
+   * candidate set never reads `total`, so paying for it there is pure waste.
+   */
+  skipCount?: boolean;
+}
+
+/**
+ * The candidate projection the UI and the screening engines expect.
+ *
+ * Shared by runIlikeSearch and getCandidatesByUrl so a campaign resolved by
+ * hydration is byte-identical to one resolved by search — normaliseCandidates
+ * reads these aliases.
+ */
+const CANDIDATE_PROJECTION = `
+                profile_url as folder_id,
+                name as full_name,
+                profile_url as resume_drive_view_url,
+                latest_role as ai_latest_role,
+                location as ai_latest_location,
+                current_company as ai_latest_company,
+                summary as candidate_summary,
+                experience as resume_text_excerpt,
+                education,
+                skills`;
+
+/**
+ * Hydrates full candidate rows from a list of profile URLs.
+ *
+ * Used by the Meilisearch campaign path, where the boolean set algebra runs in
+ * the browser but the documents themselves have no business being posted back:
+ * profile_url is the primary key, so this is an index scan.
+ */
+export async function getCandidatesByUrl(
+  profileUrls: readonly string[],
+): Promise<Record<string, unknown>[]> {
+  if (profileUrls.length === 0) return [];
+
+  const client = await pool.connect();
+  try {
+    const rows: Record<string, unknown>[] = [];
+    // Chunked so neither the bind parameter nor the result set is unbounded.
+    const CHUNK = 10_000;
+    for (let i = 0; i < profileUrls.length; i += CHUNK) {
+      const res = await client.query(
+        `SELECT ${CANDIDATE_PROJECTION}
+         FROM candidates_upgraded
+         WHERE profile_url = ANY($1::text[])`,
+        [profileUrls.slice(i, i + CHUNK)],
+      );
+      rows.push(...res.rows);
+    }
+    return rows;
+  } finally {
+    client.release();
+  }
 }
 
 export async function runIlikeSearch(params: IlikeSearchParams) {
@@ -583,17 +663,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
         `;
 
     const finalQuery = `
-            SELECT
-                profile_url as folder_id,
-                name as full_name,
-                profile_url as resume_drive_view_url,
-                latest_role as ai_latest_role,
-                location as ai_latest_location,
-                current_company as ai_latest_company,
-                summary as candidate_summary,
-                experience as resume_text_excerpt,
-                education,
-                skills
+            SELECT ${CANDIDATE_PROJECTION}
             FROM candidates_upgraded
             ${whereClause}
             LIMIT $${paramIndex}
@@ -606,10 +676,13 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // overlapping them saves 0.5% of latency while taking two connections per
     // search instead of one — halving how many searches the pool can serve at
     // once. Not a trade worth making.
-    const countRes = await client.query(countQuery, values);
+    //
+    // skipCount drops the count entirely for callers that never read it.
+    const counted = params.skipCount
+      ? 0
+      : ((await client.query(countQuery, values)).rows[0].n as number);
     const res = await client.query(finalQuery, [...values, params.limit]);
 
-    const counted = countRes.rows[0].n as number;
     const totalIsCapped = counted > COUNT_CAP;
     const total = totalIsCapped ? COUNT_CAP : counted;
 
@@ -670,13 +743,14 @@ export async function getAvailableLocations(): Promise<string[]> {
   return inFlight;
 }
 
-async function queryAvailableLocations(): Promise<string[]> {
-  const client = await pool.connect();
-  try {
-    // Consolidated top-level regions (Tokyo, Kanagawa, Osaka, Singapore, etc.)
-    const query = `
-            WITH normalized AS (
-              SELECT 
+/**
+ * Region mapping, applied to one row per DISTINCT location.
+ *
+ * Kept in application code rather than baked into the materialised view: these
+ * are business rules that change (a new city, a renamed region), and changing
+ * them here needs a deploy, not a schema migration.
+ */
+const LOCATION_REGION_CASE = `
                 CASE
                   WHEN location ILIKE '%tokyo%' THEN 'Tokyo'
                   WHEN location ILIKE '%kanagawa%' OR location ILIKE '%yokohama%' OR location ILIKE '%kawasaki%' OR location ILIKE '%fujisawa%' THEN 'Kanagawa'
@@ -700,22 +774,112 @@ async function queryAvailableLocations(): Promise<string[]> {
                   WHEN location ILIKE '%malaysia%' THEN 'Malaysia'
                   WHEN location ILIKE '%japan%' THEN 'Japan'
                   ELSE trim(split_part(location, ',', 1))
-                END AS display_location,
-                count(*) as cnt
-              FROM candidates_upgraded
-              WHERE location IS NOT NULL AND location != ''
-              GROUP BY location
+                END`;
+
+/**
+ * Rolls per-location counts up into the region list.
+ *
+ * `AS MATERIALIZED` is load-bearing, not decoration. Without it the planner
+ * inlines the CTE and pushes the outer
+ *
+ *     WHERE display_location IS NOT NULL AND display_location <> ''
+ *
+ * down into the scan — and since `display_location` IS the CASE expression, the
+ * whole 21-branch CASE then appears twice in the scan's Filter and is evaluated
+ * twice per input row. Fencing the CTE halves the work (measured on the 19,003
+ * row source: 486 ms -> 170 ms).
+ *
+ * @param source table or view providing (location, cnt)
+ */
+const regionRollupQuery = (source: string) => `
+            WITH normalized AS MATERIALIZED (
+              SELECT ${LOCATION_REGION_CASE} AS display_location, cnt
+              FROM ${source}
             )
-            SELECT display_location, SUM(cnt)::int as total
+            SELECT display_location, SUM(cnt)::int AS total
             FROM normalized
-            WHERE display_location IS NOT NULL AND display_location != ''
+            WHERE display_location IS NOT NULL AND display_location <> ''
             GROUP BY display_location
             HAVING SUM(cnt) >= 100
-            ORDER BY total DESC;
-        `;
-    const res = await client.query(query);
-    cachedLocations = res.rows.map((r) => r.display_location).sort();
-    return cachedLocations;
+            ORDER BY total DESC`;
+
+/** Materialised per-location counts. See migration 006. */
+const LOCATION_COUNTS_MATVIEW = 'candidate_location_counts';
+
+/** Live equivalent of the matview, for the fallback path. */
+const LOCATION_COUNTS_INLINE = `(
+              SELECT location, count(*)::bigint AS cnt
+              FROM candidates_upgraded
+              WHERE location IS NOT NULL AND location <> ''
+              GROUP BY location
+            ) AS live_counts`;
+
+/**
+ * Whether candidate_location_counts exists.
+ *
+ * Checked once and remembered: the answer only changes when a migration runs,
+ * and this is on the cold path of a user-facing request.
+ */
+let matviewAvailable: boolean | null = null;
+
+async function hasLocationMatview(client: PoolClient): Promise<boolean> {
+  if (matviewAvailable !== null) return matviewAvailable;
+  const res = await client.query(
+    `SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'm' LIMIT 1`,
+    [LOCATION_COUNTS_MATVIEW],
+  );
+  matviewAvailable = (res.rowCount ?? 0) > 0;
+  if (!matviewAvailable) {
+    logWarn('location_matview_missing', {
+      matview: LOCATION_COUNTS_MATVIEW,
+      impact: 'falling back to the live aggregate — ~2.4s per cold load instead of ~170ms',
+      fix: 'apply packages/scraper/migrations/006_location_counts_matview.sql',
+    });
+  }
+  return matviewAvailable;
+}
+
+/**
+ * Refreshes the location snapshot.
+ *
+ * The matview does not see rows added since it was last built, so a scrape that
+ * introduces a new region will not surface it in the filter UI until this runs.
+ * CONCURRENTLY keeps the view readable throughout — it needs the unique index
+ * migration 006 creates.
+ *
+ * Returns false when the matview is not installed, so callers can treat this as
+ * advisory rather than a failure.
+ */
+export async function refreshLocationCounts(): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    if (!(await hasLocationMatview(client))) return false;
+    const started = Date.now();
+    // Not a parameterisable position; the identifier is a module constant.
+    await client.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${LOCATION_COUNTS_MATVIEW}`);
+    logInfo('location_matview_refreshed', { durationMs: Date.now() - started });
+    invalidateLocationCache();
+    return true;
+  } finally {
+    client.release();
+  }
+}
+
+async function queryAvailableLocations(): Promise<string[]> {
+  const client = await pool.connect();
+  try {
+    // Reads the 19,003-row snapshot rather than aggregating 5,661,466 rows on
+    // the request. Falls back to the live aggregate when the matview has not
+    // been installed, so the endpoint degrades in speed rather than failing.
+    const source = (await hasLocationMatview(client))
+      ? LOCATION_COUNTS_MATVIEW
+      : LOCATION_COUNTS_INLINE;
+
+    const res = await client.query(regionRollupQuery(source));
+    // Deliberately does NOT assign cachedLocations here: getAvailableLocations
+    // owns the cache and bumps cachedAt with it. Writing from both places made
+    // a failed refresh briefly visible as a fresh one.
+    return res.rows.map((r) => r.display_location as string).sort();
   } finally {
     client.release();
   }

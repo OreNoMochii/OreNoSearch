@@ -1,15 +1,26 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { config } from '../config';
-import type { BatchQueue } from '../domain/ports';
-import type { CandidateInput } from '../core/schemas';
+import type { BatchQueue, CandidateSpec } from '../domain/ports';
 import { outreachOrchestrator } from '../composition';
 import { logInfo, logWarn, logError } from '../utils/logger';
 
-/** Payload persisted in Redis for one outreach campaign. */
+/**
+ * Payload persisted in Redis for one outreach campaign.
+ *
+ * `candidateSpec` replaced a `uiCandidates: CandidateInput[]` field holding up
+ * to 100,000 fully-populated candidate rows. That array was posted from the
+ * browser and then stored here verbatim, so every queued campaign occupied
+ * hundreds of megabytes of Redis — and `removeOnComplete.count` kept 500 of
+ * them. The spec is a few hundred bytes and the worker resolves it against
+ * Postgres.
+ */
 export interface OutreachJobData {
   jdText: string;
-  uiCandidates: CandidateInput[];
+  candidateSpec: CandidateSpec;
+  /** Caller's estimate, used only as the progress denominator until the
+   *  worker resolves the set and publishes the real figure. */
+  candidateCount: number;
   companyName: string;
   jobName: string;
   recipients: string;
@@ -30,10 +41,32 @@ export interface OutreachJobData {
 /** Redis key holding the monotonic batch counter (B27). */
 const BATCH_ID_KEY = 'metaview:batch-id';
 
+/** Progress state for one in-flight batch, held next to its job handle. */
+interface ActiveBatch {
+  job: Job<OutreachJobData>;
+  processed: number;
+  total: number;
+  /** Set while a flush to Redis is pending, so bursts coalesce. */
+  flushTimer?: NodeJS.Timeout;
+}
+
+/** Minimum gap between progress writes to Redis. */
+const PROGRESS_FLUSH_MS = 1_000;
+
 export class BullBatchQueue implements BatchQueue {
   private readonly queue: Queue<OutreachJobData>;
   private readonly worker: Worker<OutreachJobData>;
   private closing = false;
+
+  /**
+   * Job handles for batches this process is running.
+   *
+   * reportProgress previously called `queue.getJobs(['active'], 0, 50)` on
+   * *every* candidate and linear-scanned the result — a Redis round trip
+   * deserialising up to 50 job payloads per candidate processed. Holding the
+   * handle the worker was already given makes it a local map lookup.
+   */
+  private readonly active = new Map<number, ActiveBatch>();
 
   constructor(private readonly connection: Redis) {
     this.queue = new Queue('outreach', { connection });
@@ -52,27 +85,39 @@ export class BullBatchQueue implements BatchQueue {
         // no-op — campaigns silently ran the standard LLM path instead.
         const engine = job.data.usePipeline ? 'pipeline' : job.data.screeningEngine;
 
-        await outreachOrchestrator.run({
-          jdText: job.data.jdText,
-          uiCandidates: job.data.uiCandidates,
-          companyName: job.data.companyName,
-          jobName: job.data.jobName,
-          recipients: job.data.recipients,
-          cc: undefined,
-          bypassDeduplication: job.data.bypassDeduplication,
-          batchId: job.data.batchId,
-          useCompanyIntel: job.data.useCompanyIntel,
-          screening: {
-            engine,
-            model: job.data.targetModel,
-            adjacentRoles: job.data.adjacentRoles,
-            topN: job.data.topN,
-            topK: job.data.topK,
-            treeTopK: job.data.treeTopK,
-            minExp: job.data.minExp,
-            maxExp: job.data.maxExp,
-          },
+        this.active.set(job.data.batchId, {
+          job,
+          processed: 0,
+          total: job.data.candidateCount,
         });
+
+        try {
+          await outreachOrchestrator.run({
+            jdText: job.data.jdText,
+            candidateSpec: job.data.candidateSpec,
+            companyName: job.data.companyName,
+            jobName: job.data.jobName,
+            recipients: job.data.recipients,
+            cc: undefined,
+            bypassDeduplication: job.data.bypassDeduplication,
+            batchId: job.data.batchId,
+            useCompanyIntel: job.data.useCompanyIntel,
+            screening: {
+              engine,
+              model: job.data.targetModel,
+              adjacentRoles: job.data.adjacentRoles,
+              topN: job.data.topN,
+              topK: job.data.topK,
+              treeTopK: job.data.treeTopK,
+              minExp: job.data.minExp,
+              maxExp: job.data.maxExp,
+            },
+          });
+        } finally {
+          const entry = this.active.get(job.data.batchId);
+          if (entry?.flushTimer) clearTimeout(entry.flushTimer);
+          this.active.delete(job.data.batchId);
+        }
       },
       { connection, concurrency: config.MAX_CONCURRENT_BATCHES },
     );
@@ -120,18 +165,49 @@ export class BullBatchQueue implements BatchQueue {
     return job.batchId;
   }
 
-  /** Publishes progress so /api/queue-status reflects work in flight. */
-  async reportProgress(batchId: number, processed: number): Promise<void> {
-    try {
-      const jobs = await this.queue.getJobs(['active'], 0, 50);
-      const job = jobs.find((j) => j.data.batchId === batchId);
-      await job?.updateProgress(processed);
-    } catch (err) {
-      // Progress reporting is advisory: never fail a campaign over it.
-      logWarn('bullmq_progress_failed', {
-        batchId,
-        message: (err as Error).message,
+  /**
+   * Publishes progress so /api/queue-status reflects work in flight.
+   *
+   * `delta` accumulates locally and is flushed to Redis at most once per
+   * PROGRESS_FLUSH_MS. The previous implementation fetched up to 50 active jobs
+   * from Redis on every call and then passed the *delta* to updateProgress, so
+   * a 100,000-candidate campaign made 100,000 round trips to report a value
+   * that was always 1.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await -- BatchQueue port is async
+  async reportProgress(batchId: number, delta: number): Promise<void> {
+    const entry = this.active.get(batchId);
+    if (!entry) return;
+
+    entry.processed += delta;
+    if (entry.flushTimer) return;
+
+    entry.flushTimer = setTimeout(() => {
+      entry.flushTimer = undefined;
+      void entry.job.updateProgress(entry.processed).catch((err: unknown) => {
+        // Progress reporting is advisory: never fail a campaign over it.
+        logWarn('bullmq_progress_failed', { batchId, message: (err as Error).message });
       });
+    }, PROGRESS_FLUSH_MS);
+    entry.flushTimer.unref();
+  }
+
+  /**
+   * Records how many candidates a batch will actually process.
+   *
+   * With a server-resolved candidate set the enqueuing client cannot know this,
+   * so the job carries only an estimate until the worker publishes the real
+   * figure here.
+   */
+  async setBatchSize(batchId: number, total: number): Promise<void> {
+    const entry = this.active.get(batchId);
+    if (!entry) return;
+
+    entry.total = total;
+    try {
+      await entry.job.updateData({ ...entry.job.data, candidateCount: total });
+    } catch (err) {
+      logWarn('bullmq_size_update_failed', { batchId, message: (err as Error).message });
     }
   }
 
@@ -153,15 +229,20 @@ export class BullBatchQueue implements BatchQueue {
       activeCount: active,
       pendingCount: waiting,
       maxConcurrent: config.MAX_CONCURRENT_BATCHES,
-      activeBatches: activeJobs.map((j) => ({
-        id: j.data.batchId,
-        size: j.data.uiCandidates.length,
-        processed: typeof j.progress === 'number' ? j.progress : 0,
-        owner: j.data.recipients,
-      })),
+      activeBatches: activeJobs.map((j) => {
+        // Prefer this process's live counters: they are ahead of whatever was
+        // last flushed to Redis, and they carry the resolved candidate total.
+        const local = this.active.get(j.data.batchId);
+        return {
+          id: j.data.batchId,
+          size: local?.total ?? j.data.candidateCount,
+          processed: local?.processed ?? (typeof j.progress === 'number' ? j.progress : 0),
+          owner: j.data.recipients,
+        };
+      }),
       queuedBatches: waitingJobs.map((j) => ({
         id: j.data.batchId,
-        size: j.data.uiCandidates.length,
+        size: j.data.candidateCount,
         owner: j.data.recipients,
       })),
     };

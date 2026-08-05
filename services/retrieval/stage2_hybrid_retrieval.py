@@ -87,17 +87,28 @@ def _fetch_vector(jd_text: str, limit: int) -> list[dict]:
     try:
         embedding = embed_text(jd_text)
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+        want = limit * 2
 
         with vector_cursor() as cur:
+            # HNSW only explores ef_search candidates, and pgvector's default is
+            # 40. Asking for 2,000 neighbours with ef_search=40 silently returns
+            # a poorly-ranked handful, so the vector leg of the fusion was
+            # contributing far less than it appeared to.
+            cur.execute("SET LOCAL hnsw.ef_search = %s", (min(max(want, 40), 1000),))
+
+            # Selects only what the caller reads. `text_blob` (stored at up to
+            # 3,000 chars/row) and the computed `similarity` were both fetched
+            # and discarded — roughly 6 MB transferred, allocated and thrown
+            # away per search at top_n=1000. Stage 3 builds its own blob from
+            # the golden DB anyway.
             cur.execute(
                 """
-                SELECT profile_url, name, headline, summary_text, text_blob,
-                       1 - (embedding <=> %s::vector) AS similarity
+                SELECT profile_url, name, headline, summary_text
                 FROM   candidate_embeddings
                 ORDER  BY embedding <=> %s::vector
                 LIMIT  %s
                 """,
-                (vec_str, vec_str, limit * 2),
+                (vec_str, want),
             )
             rows = cur.fetchall()
 

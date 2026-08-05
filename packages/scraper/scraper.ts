@@ -843,23 +843,32 @@ async function scrollAndExtract(
           .querySelectorAll('[data-scraper-scroll]')
           .forEach((el) => el.removeAttribute('data-scraper-scroll'));
 
-        const potential = Array.from(document.querySelectorAll('*')).filter((el) => {
-          const hEl = el as HTMLElement;
-          const style = window.getComputedStyle(el);
-          const text = hEl.innerText || '';
-          const hasCandidates =
+        // Ordered cheapest-check-first.
+        //
+        // This used to walk EVERY element in the document, reading innerText,
+        // getComputedStyle, scrollHeight and clientHeight for each. All four
+        // flush layout and innerText forces a full style-and-layout pass, so
+        // this was thousands of synchronous reflows per call — and it is called
+        // once per page of results.
+        //
+        // Narrow structurally first, then filter on textContent (which does not
+        // touch layout), and only measure the survivors.
+        const divs = Array.from(document.querySelectorAll('div'));
+
+        const withText = divs.filter((el) => {
+          const text = el.textContent || '';
+          return (
             text.includes('Experience') ||
             text.includes('Overview') ||
             text.includes('Education') ||
-            text.includes('Summary');
-
-          return (
-            el.scrollHeight - Math.floor(el.clientHeight) > 10 &&
-            (style.overflowY === 'auto' ||
-              style.overflowY === 'scroll' ||
-              style.overflowY === 'hidden') &&
-            hasCandidates
+            text.includes('Summary')
           );
+        });
+
+        const potential = withText.filter((el) => {
+          if (el.scrollHeight - Math.floor(el.clientHeight) <= 10) return false;
+          const overflowY = window.getComputedStyle(el).overflowY;
+          return overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden';
         });
 
         // Pick the largest container by area

@@ -16,8 +16,17 @@ class StateManager {
         generatedRoles: []
     };
 
+    /** Membership index over extractedChats. The array grows without bound
+     *  across runs, and hasExtracted is called once per sidebar chat. */
+    private extractedIndex = new Set<string>();
+
+    /** Set while a debounced write is pending, so a burst of updates costs one
+     *  file write rather than one per update. */
+    private flushTimer: NodeJS.Timeout | null = null;
+
     constructor() {
         this.load();
+        this.extractedIndex = new Set(this.state.extractedChats);
     }
 
     private load() {
@@ -35,8 +44,41 @@ class StateManager {
         }
     }
 
+    /**
+     * Persists state, coalescing bursts.
+     *
+     * Every recordExtraction / recordExpansion / recordRoleSearch used to
+     * rewrite the whole file synchronously, pretty-printed. During a scrape
+     * those arrive in bursts, so the process blocked on disk repeatedly to
+     * write a file whose final contents are the only ones that matter.
+     *
+     * flushNow() exists so a caller can force the write before exit.
+     */
     private save() {
-        fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2));
+        if (this.flushTimer) return;
+        this.flushTimer = setTimeout(() => {
+            this.flushTimer = null;
+            this.writeState();
+        }, 250);
+        // Do not hold the process open purely for a pending state write.
+        this.flushTimer.unref();
+    }
+
+    private writeState() {
+        try {
+            fs.writeFileSync(STATE_FILE, JSON.stringify(this.state));
+        } catch (e) {
+            console.error('Failed to persist state:', e);
+        }
+    }
+
+    /** Writes any pending state immediately. Call before a deliberate exit. */
+    flushNow() {
+        if (this.flushTimer) {
+            clearTimeout(this.flushTimer);
+            this.flushTimer = null;
+        }
+        this.writeState();
     }
 
     // Role tracking
@@ -63,14 +105,14 @@ class StateManager {
 
     // Candidate Extraction tracking
     hasExtracted(chatId: string): boolean {
-        return this.state.extractedChats.includes(chatId);
+        return this.extractedIndex.has(chatId);
     }
 
     recordExtraction(chatId: string) {
-        if (!this.hasExtracted(chatId)) {
-            this.state.extractedChats.push(chatId);
-            this.save();
-        }
+        if (this.extractedIndex.has(chatId)) return;
+        this.extractedIndex.add(chatId);
+        this.state.extractedChats.push(chatId);
+        this.save();
     }
 
     getExpandedIds(maxExpansions: number = 2): string[] {

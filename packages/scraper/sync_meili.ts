@@ -1,7 +1,7 @@
 import parseArgs from 'minimist';
 import { Meilisearch } from 'meilisearch';
+import type { PoolClient } from 'pg';
 import pool from './database';
-import fs from 'fs';
 
 const args = parseArgs(process.argv.slice(2));
 const clearIndex = args.clear || false;
@@ -49,6 +49,39 @@ function getMonthsInCurrentRole(experience?: string): number {
   return months;
 }
 
+/**
+ * Refreshes the location snapshot that backs GET /api/locations.
+ *
+ * candidate_location_counts (migration 006) is a materialised view, so regions
+ * introduced by a scrape do not reach the filter UI until it is rebuilt. This
+ * is the natural hook: the sync runs after the scraper has finished writing,
+ * and it already holds a connection.
+ *
+ * CONCURRENTLY keeps the view readable while it rebuilds. Advisory — a failure
+ * here means a slightly stale filter list, never a failed sync.
+ */
+async function refreshLocationCounts(client: PoolClient): Promise<void> {
+  try {
+    const exists = await client.query(
+      `SELECT 1 FROM pg_class WHERE relname = 'candidate_location_counts' AND relkind = 'm' LIMIT 1`,
+    );
+    if ((exists.rowCount ?? 0) === 0) {
+      console.warn(
+        '[locations] candidate_location_counts not found — skipping refresh. ' +
+          'Apply packages/scraper/migrations/006_location_counts_matview.sql.',
+      );
+      return;
+    }
+
+    console.log('Refreshing location counts (materialized view)...');
+    const started = Date.now();
+    await client.query('REFRESH MATERIALIZED VIEW CONCURRENTLY candidate_location_counts');
+    console.log(`Location counts refreshed in ${Date.now() - started}ms.`);
+  } catch (e: any) {
+    console.warn(`Warning: could not refresh location counts: ${e.message}`);
+  }
+}
+
 async function syncPostgresToMeili() {
   console.log('--- Starting PostgreSQL to Meilisearch Synchronization ---');
 
@@ -92,14 +125,32 @@ async function syncPostgresToMeili() {
 
     console.log('Fetching candidates in batches and adding to Meilisearch...');
     const BATCH_SIZE = 5000;
-    let offset = 0;
     let batchNumber = 1;
+    let synced = 0;
 
-    while (offset < totalCandidates) {
-      const res = await client.query(`SELECT * FROM candidates_upgraded LIMIT $1 OFFSET $2`, [
-        BATCH_SIZE,
-        offset,
-      ]);
+    // Keyset pagination on the primary key, not LIMIT/OFFSET.
+    //
+    // OFFSET makes Postgres produce and discard every row before the offset, so
+    // walking a 5.66M-row table 5,000 at a time scanned roughly N^2/2B rows in
+    // total — about 3.2 billion row-visits to return 5.66 million. Each batch is
+    // now an index range scan of exactly BATCH_SIZE rows.
+    //
+    // The explicit column list replaces SELECT *: scraped_at aside, every column
+    // below is actually indexed into Meilisearch, and the wildcard dragged
+    // whatever else the table happens to carry across the wire.
+    let cursor = '';
+
+    for (;;) {
+      const res = await client.query(
+        `SELECT profile_url, name, email, headline, current_company, latest_role,
+                experience, location, skills, summary, phone_number, education,
+                language, licenses, scraped_at
+         FROM   candidates_upgraded
+         WHERE  profile_url > $1
+         ORDER  BY profile_url
+         LIMIT  $2`,
+        [cursor, BATCH_SIZE],
+      );
       const candidates = res.rows;
 
       if (candidates.length === 0) break;
@@ -127,17 +178,23 @@ async function syncPostgresToMeili() {
 
       const task = await index.addDocuments(documents);
       console.log(
-        `Submitted batch ${batchNumber} of ${Math.ceil(totalCandidates / BATCH_SIZE)} (Task UID: ${task.taskUid}, Records: ${offset + 1} - ${offset + candidates.length})`,
+        `Submitted batch ${batchNumber} of ~${Math.ceil(totalCandidates / BATCH_SIZE)} ` +
+          `(Task UID: ${task.taskUid}, Records: ${synced + 1} - ${synced + candidates.length})`,
       );
 
-      offset += BATCH_SIZE;
+      synced += candidates.length;
+      cursor = candidates[candidates.length - 1].profile_url as string;
       batchNumber++;
     }
+
+    console.log(`Submitted ${synced} candidates across ${batchNumber - 1} batches.`);
 
     console.log('--- Document Submission successful! ---');
     console.log('Indexing tasks submitted to Meilisearch.');
     console.log('Meilisearch will index these documents asynchronously.');
     console.log('You can check progress via health/stats endpoints.');
+
+    await refreshLocationCounts(client);
   } catch (error) {
     console.error('Error during synchronization:', error);
   } finally {

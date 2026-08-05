@@ -50,12 +50,35 @@ const ROLE_CATEGORIES_MAP = {
   'Customer Success & Ops': ['customer success', 'operations', 'csm', 'support'],
 };
 
-function getAtlasBenchmark(jdText: string) {
+interface AtlasEntry {
+  benchmark_score: number;
+  examples: string[];
+}
+
+/**
+ * Role atlas, read once at module load.
+ *
+ * getAtlasBenchmark runs on every candidate, and it used to call
+ * fs.existsSync — and, whenever the file was present, fs.readFileSync plus
+ * JSON.parse of the whole atlas — inside that per-candidate path. Those are
+ * blocking syscalls on the event loop, in the middle of a concurrent screening
+ * wave. The file is deployment-static, so `null` means this deployment has no
+ * atlas and the benchmark section is simply omitted.
+ */
+const ROLE_ATLAS: Record<string, AtlasEntry> | null = (() => {
   try {
     const atlasPath = path.join(process.cwd(), 'data', 'role_atlas.json');
-    if (!fs.existsSync(atlasPath)) return '';
-    const atlas = JSON.parse(fs.readFileSync(atlasPath, 'utf8'));
+    if (!fs.existsSync(atlasPath)) return null;
+    return JSON.parse(fs.readFileSync(atlasPath, 'utf8')) as Record<string, AtlasEntry>;
+  } catch (e) {
+    console.error('Error loading role atlas:', e);
+    return null;
+  }
+})();
 
+function getAtlasBenchmark(jdText: string) {
+  if (!ROLE_ATLAS) return '';
+  try {
     let category = 'Other';
     const lowJD = jdText.toLowerCase();
     for (const [cat, keywords] of Object.entries(ROLE_CATEGORIES_MAP)) {
@@ -79,13 +102,13 @@ function getAtlasBenchmark(jdText: string) {
       seniority = 'Junior';
 
     const key = `${category} | ${seniority}`;
-    const benchmark = atlas[key];
+    const benchmark = ROLE_ATLAS[key];
 
     if (benchmark) {
       return `\n## ROLE BENCHMARK (REFERENCE ONLY)\nPattern for ${key}:\n- Typical Score: ${benchmark.benchmark_score}/100\n- Gold Standard Examples:\n  ${benchmark.examples.map((ex: string) => `  * [REFERENCE] ${ex}`).join('\n  ')}\n`;
     }
   } catch (e) {
-    console.error('Error loading role atlas:', e);
+    console.error('Error reading role atlas benchmark:', e);
   }
   return '';
 }

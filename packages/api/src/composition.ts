@@ -22,6 +22,7 @@ import { HttpRiskScorer } from './infrastructure/HttpRiskScorer';
 import { GoogleSheetsSink } from './infrastructure/GoogleSheetsSink';
 import { EmailNotifier } from './infrastructure/EmailNotifier';
 import { PostgresOutreachHistory } from './infrastructure/PostgresOutreachHistory';
+import { PostgresCandidateSource } from './infrastructure/PostgresCandidateSource';
 import { QueueProgressReporter } from './infrastructure/QueueProgressReporter';
 
 const progress = new QueueProgressReporter();
@@ -48,4 +49,6 @@ export const outreachOrchestrator = new OutreachOrchestrator(
   new GoogleSheetsSink(),
   new EmailNotifier(),
   new PostgresOutreachHistory(),
+  new PostgresCandidateSource(),
+  progress,
 );

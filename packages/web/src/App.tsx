@@ -17,6 +17,9 @@ import { ExplainableAction } from './components/ExplainableAction';
 
 const API_BASE_URL = '';
 
+/** How long typing must pause before state is written to localStorage. */
+const PERSIST_DEBOUNCE_MS = 400;
+
 function App() {
   const [mustNot, setMustNot] = useState(() => localStorage.getItem('search_mustNot') || '');
   const [andGroups, setAndGroups] = useState<string[]>(() => {
@@ -81,16 +84,26 @@ function App() {
       .catch(console.error);
   }, []);
 
-  // Persistence effect
+  // Persistence effect.
+  //
+  // Debounced: localStorage is synchronous and blocks the main thread, and this
+  // effect fires on every keystroke in the NOT-terms and AND-group textareas —
+  // eight writes plus a JSON.stringify per character typed. It also never wrote
+  // excludeCompanies despite listing it as a dependency, so that field was
+  // silently not persisted.
   useEffect(() => {
-    localStorage.setItem('search_mustNot', mustNot);
-    localStorage.setItem('search_andGroups', JSON.stringify(andGroups));
-    localStorage.setItem('search_limit', limit.toString());
-    localStorage.setItem('search_minExp', minExp.toString());
-    localStorage.setItem('search_maxExp', maxExp.toString());
-    localStorage.setItem('search_requireOneYear', requireOneYearCurrentRole.toString());
-    localStorage.setItem('search_currentRoleKeywords', currentRoleKeywords);
-    localStorage.setItem('search_selectedLocations', JSON.stringify(selectedLocations));
+    const id = window.setTimeout(() => {
+      localStorage.setItem('search_mustNot', mustNot);
+      localStorage.setItem('search_andGroups', JSON.stringify(andGroups));
+      localStorage.setItem('search_limit', limit.toString());
+      localStorage.setItem('search_minExp', minExp.toString());
+      localStorage.setItem('search_maxExp', maxExp.toString());
+      localStorage.setItem('search_requireOneYear', requireOneYearCurrentRole.toString());
+      localStorage.setItem('search_excludeCompanies', excludeCompanies);
+      localStorage.setItem('search_currentRoleKeywords', currentRoleKeywords);
+      localStorage.setItem('search_selectedLocations', JSON.stringify(selectedLocations));
+    }, PERSIST_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
   }, [
     mustNot,
     andGroups,
@@ -151,22 +164,30 @@ function App() {
   const [outreachStatus, setOutreachStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Outreach Persistence effect
+  // Outreach persistence effect.
+  //
+  // Debounced for the same reason as the search effect above, and more acutely:
+  // `outreachJd` accepts up to 200,000 characters, so every keystroke in the
+  // job-description textarea used to serialise the whole document to disk
+  // synchronously — plus thirteen unrelated writes — before the next frame.
   React.useEffect(() => {
-    localStorage.setItem('outreach_jd', outreachJd);
-    localStorage.setItem('outreach_email', outreachEmail);
-    localStorage.setItem('outreach_adjacent', adjacentRoles);
-    localStorage.setItem('outreach_jobName', jobName);
-    localStorage.setItem('outreach_companyName', companyName);
-    localStorage.setItem('outreach_engine', screeningEngine);
-    localStorage.setItem('outreach_bypassDeduplication', bypassDeduplication.toString());
-    localStorage.setItem('outreach_useCompanyIntel', useCompanyIntel.toString());
-    localStorage.setItem('outreach_usePipeline', usePipeline.toString());
-    localStorage.setItem('outreach_topN', pipelineTopN.toString());
-    localStorage.setItem('outreach_topK', pipelineTopK.toString());
-    localStorage.setItem('outreach_treeTopK', treeTopK.toString());
-    localStorage.setItem('outreach_minExp', pipelineMinExp.toString());
-    localStorage.setItem('outreach_maxExp', pipelineMaxExp.toString());
+    const id = window.setTimeout(() => {
+      localStorage.setItem('outreach_jd', outreachJd);
+      localStorage.setItem('outreach_email', outreachEmail);
+      localStorage.setItem('outreach_adjacent', adjacentRoles);
+      localStorage.setItem('outreach_jobName', jobName);
+      localStorage.setItem('outreach_companyName', companyName);
+      localStorage.setItem('outreach_engine', screeningEngine);
+      localStorage.setItem('outreach_bypassDeduplication', bypassDeduplication.toString());
+      localStorage.setItem('outreach_useCompanyIntel', useCompanyIntel.toString());
+      localStorage.setItem('outreach_usePipeline', usePipeline.toString());
+      localStorage.setItem('outreach_topN', pipelineTopN.toString());
+      localStorage.setItem('outreach_topK', pipelineTopK.toString());
+      localStorage.setItem('outreach_treeTopK', treeTopK.toString());
+      localStorage.setItem('outreach_minExp', pipelineMinExp.toString());
+      localStorage.setItem('outreach_maxExp', pipelineMaxExp.toString());
+    }, PERSIST_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
   }, [
     outreachJd,
     outreachEmail,
@@ -245,12 +266,24 @@ function App() {
     setIsSubmitting(true);
     setOutreachStatus(null);
     try {
-      let submitCandidates: BooleanHit[] = [];
+      // What the campaign screens is described, not shipped.
+      //
+      // This previously re-ran the search with `limit: 100000`, received every
+      // matching row — each carrying up to 50,000 characters of experience
+      // text — serialised the lot in the tab, and posted it back. That is
+      // hundreds of megabytes for a broad query, and anything past the 10 MB
+      // body limit was rejected outright, so large campaigns failed after the
+      // browser had already done all the work.
+      //
+      // The SQL path now sends the query itself and the server re-runs it. The
+      // Meilisearch path keeps its browser-side set algebra but sends only the
+      // resulting profile URLs, which the server hydrates from Postgres.
+      let searchParams: Record<string, unknown> | undefined;
+      let candidateUrls: string[] | undefined;
 
-      // If we are using the Advanced Pipeline AND no boolean search was run, we can skip the boolean query.
-      // The backend pipeline microservice performs its own hybrid semantic search over the entire vector DB.
+      // With the Advanced Pipeline and no boolean search run, there is nothing
+      // to describe: the retrieval microservice sources its own candidates.
       if (!usePipeline || totalMatches !== null) {
-        // Re-run boolean query without limit to ensure ALL candidates are dispatched
         const parsedExcludeCompanies = excludeCompanies
           .split(',')
           .map((s) => s.trim())
@@ -259,46 +292,64 @@ function App() {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-        const queryParams = {
-          should: [],
-          must: [],
-          mustNot: mustNot
-            .split(/,|\bOR\b|\|/i)
-            .map((s) => s.trim())
-            .filter(Boolean),
-          andGroups: andGroups
-            .map((g) =>
-              g
-                .split(/,|\bOR\b|\|/i)
-                .map((s) => s.trim())
-                .filter(Boolean),
-            )
-            .filter((g) => g.length > 0),
-          // Dispatch every match, not the displayed figure. totalMatches is
-          // capped by the server for speed, so using it here silently
-          // truncated campaigns to the cap — a search matching 500,000
-          // candidates screened only 1,000 of them (B32).
-          limit: 100000,
-          minExp: minExp === '' ? undefined : minExp,
-          maxExp: maxExp === '' ? undefined : maxExp,
-          minMonthsInCurrentRole: requireOneYearCurrentRole ? 12 : undefined,
-          excludeCompanies: parsedExcludeCompanies.length > 0 ? parsedExcludeCompanies : undefined,
-          currentRoleKeywords:
-            parsedCurrentRoleKeywords.length > 0 ? parsedCurrentRoleKeywords : undefined,
-          locationKeywords: selectedLocations.length > 0 ? selectedLocations : undefined,
-        };
-        const allCandidatesResp =
-          lastSearchMode === 'sql'
-            ? await runSqlBooleanSearch(queryParams)
-            : await runBooleanSearch(queryParams);
-        submitCandidates = allCandidatesResp.hits;
+        const parsedMustNot = mustNot
+          .split(/,|\bOR\b|\|/i)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const parsedAndGroups = andGroups
+          .map((g) =>
+            g
+              .split(/,|\bOR\b|\|/i)
+              .map((s) => s.trim())
+              .filter(Boolean),
+          )
+          .filter((g) => g.length > 0);
+
+        if (lastSearchMode === 'sql') {
+          // No `limit`: the server applies MAX_CAMPAIGN_CANDIDATES. Passing one
+          // from here is how campaigns were previously truncated to the display
+          // cap (B32).
+          searchParams = {
+            should: [],
+            must: [],
+            mustNot: parsedMustNot,
+            andGroups: parsedAndGroups,
+            locations: selectedLocations,
+            minExp: minExp === '' ? undefined : minExp,
+            maxExp: maxExp === '' ? undefined : maxExp,
+            excludeCompanies:
+              parsedExcludeCompanies.length > 0 ? parsedExcludeCompanies : undefined,
+            currentRoleKeywords:
+              parsedCurrentRoleKeywords.length > 0 ? parsedCurrentRoleKeywords : undefined,
+          };
+        } else {
+          const resp = await runBooleanSearch({
+            should: [],
+            must: [],
+            mustNot: parsedMustNot,
+            andGroups: parsedAndGroups,
+            limit: 100000,
+            minExp: minExp === '' ? undefined : minExp,
+            maxExp: maxExp === '' ? undefined : maxExp,
+            minMonthsInCurrentRole: requireOneYearCurrentRole ? 12 : undefined,
+            excludeCompanies:
+              parsedExcludeCompanies.length > 0 ? parsedExcludeCompanies : undefined,
+            currentRoleKeywords:
+              parsedCurrentRoleKeywords.length > 0 ? parsedCurrentRoleKeywords : undefined,
+            locationKeywords: selectedLocations.length > 0 ? selectedLocations : undefined,
+          });
+          // Identity only — roughly 60 bytes per candidate instead of several
+          // kilobytes.
+          candidateUrls = resp.hits.map((h) => h.folder_id).filter(Boolean);
+        }
       }
 
       const response = await fetch(`${API_BASE_URL}/api/outreach`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          candidates: submitCandidates,
+          searchParams,
+          candidateUrls,
           jd: outreachJd,
           email: outreachEmail,
           model:

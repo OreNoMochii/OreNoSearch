@@ -38,6 +38,41 @@ export interface RiskScore {
   readonly medianTenure?: number;
 }
 
+/**
+ * A candidate row as it arrives from a source, before normalisation.
+ *
+ * Deliberately open: rows come from the SQL search (folder_id / full_name /
+ * ai_latest_* aliases), from a hydration lookup, or straight from the UI, and
+ * `normaliseCandidates` reconciles the three shapes.
+ */
+export type RawCandidateRow = Record<string, unknown>;
+
+/** The search that defines a campaign's candidate set. */
+export interface CandidateSearchSpec {
+  readonly andGroups: readonly (readonly string[])[];
+  readonly must: readonly string[];
+  readonly should: readonly string[];
+  readonly mustNot: readonly string[];
+  readonly locations: readonly string[];
+  readonly minExp?: number;
+  readonly maxExp?: number;
+  readonly excludeCompanies?: readonly string[];
+  readonly currentRoleKeywords?: readonly string[];
+}
+
+/**
+ * How a campaign names its candidate set.
+ *
+ * `search` and `urls` exist so the rows themselves never travel through the
+ * browser and the job queue: a 100,000-candidate campaign is a search
+ * description of a few hundred bytes, not several hundred megabytes of resume
+ * text posted from a tab and then persisted into Redis.
+ */
+export type CandidateSpec =
+  | { readonly kind: 'search'; readonly params: CandidateSearchSpec }
+  | { readonly kind: 'urls'; readonly urls: readonly string[] }
+  | { readonly kind: 'inline'; readonly rows: readonly RawCandidateRow[] };
+
 export type Verdict = 'PASS' | 'REJECT';
 
 export interface ScreeningResult {
@@ -84,6 +119,17 @@ export interface ScreeningStrategy {
     candidates: readonly ScreenedCandidate[],
     opts: ScreeningOptions,
   ): Promise<readonly ScreeningResult[]>;
+}
+
+/**
+ * Resolves a CandidateSpec into actual rows.
+ *
+ * The Postgres adapter re-runs the search or hydrates by primary key; both are
+ * work the database was going to do anyway, done on the same machine as the
+ * data instead of after a round trip through a browser tab.
+ */
+export interface CandidateSource {
+  resolve(spec: CandidateSpec, limit: number): Promise<readonly RawCandidateRow[]>;
 }
 
 /**
@@ -146,11 +192,20 @@ export interface OutreachHistoryRepository {
  */
 export interface ProgressReporter {
   report(batchId: number | undefined, delta?: number): void;
+  /**
+   * Declares how many candidates the batch will process.
+   *
+   * Only the caller that resolves the candidate set knows this — with a
+   * server-side search the enqueuing client cannot, so without this the UI
+   * progress bar would have no denominator.
+   */
+  setTotal(batchId: number | undefined, total: number): void;
 }
 
 /** No-op reporter for tests and non-HTTP callers. */
 export const nullProgressReporter: ProgressReporter = {
   report: () => undefined,
+  setTotal: () => undefined,
 };
 
 /**
@@ -162,7 +217,9 @@ export const nullProgressReporter: ProgressReporter = {
  */
 export interface BatchQueue {
   enqueue(job: unknown): Promise<number>;
-  reportProgress(batchId: number, processed: number): Promise<void>;
+  /** `delta` is the number of candidates completed since the last call, not a
+   *  running total — the implementation accumulates. */
+  reportProgress(batchId: number, delta: number): Promise<void>;
   snapshot(): Promise<{
     readonly activeCount: number;
     readonly pendingCount: number;

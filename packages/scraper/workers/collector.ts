@@ -12,7 +12,9 @@ export async function runCollectorWorker(page: Page) {
 
     while (true) {
         try {
-            const extractedUrls = stateManager.getExtractedIds();
+            // Set, not array: this is membership-tested once per sidebar chat
+            // and the extracted list grows without bound across runs.
+            const extractedUrls = new Set(stateManager.getExtractedIds());
             
             // Ensure sidebar is expanded
             await ensureSidebarOpen(page);
@@ -39,7 +41,7 @@ export async function runCollectorWorker(page: Page) {
 
             for (const url of uniqueUrls) {
                 // Skip if we've already extracted this chat
-                if (extractedUrls.includes(url)) continue;
+                if (extractedUrls.has(url)) continue;
                 
                 const currentClean = page.url().split('?')[0];
                 if (url !== currentClean) {
@@ -49,11 +51,11 @@ export async function runCollectorWorker(page: Page) {
                 }
                 
                 // Verify candidates are actually on screen
+                // One textContent read on body rather than one per element
+                // across every div, span and button on the page.
                 const hasCandidates = await page.evaluate(() => {
-                    return Array.from(document.querySelectorAll('div, span, button')).some(el => {
-                         const text = (el.textContent || '').toLowerCase();
-                         return text.includes('candidate pack') || /\d+ candidates/.test(text) || text.includes('new candidates');
-                    });
+                    const text = (document.body.textContent || '').toLowerCase();
+                    return text.includes('candidate pack') || /\d+ candidates/.test(text) || text.includes('new candidates');
                 });
                 
                 if (hasCandidates) {
@@ -70,7 +72,7 @@ export async function runCollectorWorker(page: Page) {
             if (!didExtract) {
                 // Fallback: check current screen for dynamically loaded candidates
                 const currentHref = page.url().split('?')[0];
-                if (currentHref.includes('/sourcing/') && !extractedUrls.includes(currentHref)) {
+                if (currentHref.includes('/sourcing/') && !extractedUrls.has(currentHref)) {
                     const isThinking = await page.evaluate(() => {
                         const allHtml = (document.body.innerText || '').toLowerCase();
                         return allHtml.includes('metaview is thinking') || allHtml.includes('generating');
@@ -78,10 +80,8 @@ export async function runCollectorWorker(page: Page) {
                     
                     if (!isThinking) {
                         const hasCandidatesOnScreen = await page.evaluate(() => {
-                            return Array.from(document.querySelectorAll('div, span, button')).some(d => {
-                                const t = (d.textContent || '').toLowerCase();
-                                return t.includes('candidate pack') || /\d+ candidates/.test(t);
-                            });
+                            const t = (document.body.textContent || '').toLowerCase();
+                            return t.includes('candidate pack') || /\d+ candidates/.test(t);
                         });
                         
                         if (hasCandidatesOnScreen) {
@@ -123,17 +123,30 @@ async function scrollAndExtract(page: Page, prefix: string = '', pageUrl: string
     const containerSelectors = await page.evaluate(() => {
         document.querySelectorAll('[data-scraper-scroll]').forEach(el => el.removeAttribute('data-scraper-scroll'));
 
-        const potential = Array.from(document.querySelectorAll('*')).filter(el => {
-            const hEl = el as HTMLElement;
-            const style = window.getComputedStyle(el);
-            const text = hEl.innerText || '';
-            const hasCandidates = text.includes('Experience') || text.includes('Education') || text.includes('Summary');
-            
-            return el.scrollHeight - Math.floor(el.clientHeight) > 10 && 
-                   (style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'hidden') &&
-                   hasCandidates;
+        // Ordered cheapest-check-first.
+        //
+        // This used to walk EVERY element in the document and, for each, read
+        // innerText, getComputedStyle, scrollHeight and clientHeight. All four
+        // flush layout, and innerText forces a full style-and-layout pass — so
+        // on a page with thousands of nodes this was thousands of synchronous
+        // reflows, repeated on every iteration of the scroll loop below.
+        //
+        // Now: narrow structurally first (candidate cards are divs), then
+        // filter on textContent, which reads the DOM without touching layout,
+        // and only measure the handful of survivors.
+        const divs = Array.from(document.querySelectorAll('div'));
+
+        const withText = divs.filter(el => {
+            const text = el.textContent || '';
+            return text.includes('Experience') || text.includes('Education') || text.includes('Summary');
         });
-        
+
+        const potential = withText.filter(el => {
+            if (el.scrollHeight - Math.floor(el.clientHeight) <= 10) return false;
+            const overflowY = window.getComputedStyle(el).overflowY;
+            return overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden';
+        });
+
         potential.sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight));
 
         const picked: Element[] = [];

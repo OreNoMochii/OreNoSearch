@@ -8,7 +8,7 @@ import {
   ProgressReporter,
   nullProgressReporter,
 } from '../domain/ports';
-import { saveScreeningResult } from '../repositories/postgres_repo';
+import { saveScreeningResultsBatch } from '../repositories/postgres_repo';
 import { logInfo, logWarn, logError } from '../utils/logger';
 
 const PY_TREE_SCORER = path.resolve(
@@ -107,21 +107,19 @@ export class TreeScreeningAdapter implements ScreeningStrategy {
     }));
 
     // Persist verdicts so the dedup path can skip re-screening these later.
-    await Promise.all(
-      results.map((r) =>
-        saveScreeningResult(
-          r.profileUrl,
-          opts.companyName,
-          opts.jobName,
-          r.verdict,
-          r.reasoning,
-        ).catch((err: unknown) =>
-          logWarn('tree_verdict_persist_failed', {
-            profileUrl: r.profileUrl,
-            message: (err as Error).message,
-          }),
-        ),
-      ),
+    //
+    // One statement, not one per candidate. This was a Promise.all over
+    // saveScreeningResult, so a treeTopK of 2,000 opened 2,000 concurrent
+    // checkouts against the 20-connection pool that /api/search also uses —
+    // searches queued behind the campaign until pg-pool's connection timeout
+    // fired.
+    await saveScreeningResultsBatch(results, opts.companyName, opts.jobName).catch(
+      (err: unknown) => {
+        logWarn('tree_verdict_persist_failed', {
+          count: results.length,
+          message: (err as Error).message,
+        });
+      },
     );
 
     return results;

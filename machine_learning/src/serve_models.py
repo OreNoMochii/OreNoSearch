@@ -59,6 +59,12 @@ def train_model():
     )
     
     model.fit(X, y, verbose=False)
+
+    # Index by profile_url so /score is a hash lookup rather than a full-frame
+    # scan. drop=False keeps the column addressable for the response.
+    df = df.set_index('profile_url', drop=False)
+    df.index.name = 'profile_url_idx'
+
     print("Model trained successfully!")
     return model, df, feature_cols
 
@@ -70,53 +76,58 @@ class ScoreRequest(BaseModel):
 
 @app.post("/score")
 def score_candidates(req: ScoreRequest):
+    """
+    Score a set of candidates for attrition risk.
+
+    Two things used to make this scale with the size of the feature table
+    rather than the size of the request:
+
+      1. `df['profile_url'].isin(req.profile_urls)` built a boolean mask over
+         every row in candidates_rl_features on each call — O(total_rows), not
+         O(requested).
+      2. `for i, row in req_df.reset_index().iterrows()` materialised a pandas
+         Series per candidate, which is roughly two orders of magnitude slower
+         than working on the underlying arrays.
+
+    The frame is now indexed by profile_url at startup, so selection is a hash
+    join, and the response is assembled from numpy arrays.
+    """
     if not req.profile_urls or not model_data:
         return {"scored_candidates": {}}
-        
+
     model, df, feature_cols = model_data
-    
-    # Filter the dataframe for the requested URLs
-    mask = df['profile_url'].isin(req.profile_urls)
-    req_df = df[mask].copy()
-    
+
+    # Hash-join against the index; drops duplicates and unknown URLs for free.
+    wanted = pd.Index(dict.fromkeys(req.profile_urls))
+    req_df = df.loc[df.index.intersection(wanted)]
+
     results = {}
-    
+
     if len(req_df) > 0:
-        X_req = req_df[feature_cols].fillna(0)
-        probs = model.predict_proba(X_req)[:, 1]
-        preds = (probs >= 0.43).astype(int) # Using our tuned threshold
-        
-        for i, row in req_df.reset_index().iterrows():
-            url = row['profile_url']
-            prob = float(probs[i])
-            pred = preds[i]
-            drift = row['semantic_drift_score']
-            if drift is None or (isinstance(drift, float) and np.isnan(drift)):
-                drift = 0.0
-            drift = float(drift)
-            
-            # Sanitize any remaining NaN/inf
-            relevancy = (1.0 - min(drift, 1.0)) * 5.0
-            if np.isnan(prob) or np.isinf(prob): prob = 0.05
-            if np.isnan(relevancy) or np.isinf(relevancy): relevancy = 0.5
-            
-            results[url] = {
-                'hazard': 100 if pred == 1 else 10,
-                'relevancy': round(relevancy, 4),
-                'move_prob': round(prob, 6),
-                'tenure': 24
+        probs = model.predict_proba(req_df[feature_cols].fillna(0))[:, 1]
+        probs = np.nan_to_num(np.asarray(probs, dtype=float),
+                              nan=0.05, posinf=0.05, neginf=0.05)
+        preds = probs >= 0.43  # tuned threshold
+
+        drift = pd.to_numeric(req_df['semantic_drift_score'], errors='coerce') \
+                  .fillna(0.0).clip(upper=1.0).to_numpy(dtype=float)
+        relevancy = np.nan_to_num((1.0 - drift) * 5.0, nan=0.5, posinf=0.5, neginf=0.5)
+
+        results = {
+            url: {
+                'hazard': 100 if pred else 10,
+                'relevancy': round(float(rel), 4),
+                'move_prob': round(float(prob), 6),
+                'tenure': 24,
             }
-    
-    # Fallback for missing URLs
+            for url, pred, prob, rel in zip(req_df['profile_url'], preds, probs, relevancy)
+        }
+
+    # Fallback for URLs with no features on record.
+    default = {'hazard': 10, 'relevancy': 0.5, 'move_prob': 0.05, 'tenure': 24}
     for url in req.profile_urls:
-        if url not in results:
-            results[url] = {
-                'hazard': 10,
-                'relevancy': 0.5,
-                'move_prob': 0.05,
-                'tenure': 24
-            }
-            
+        results.setdefault(url, dict(default))
+
     return {"scored_candidates": results}
 
 if __name__ == "__main__":

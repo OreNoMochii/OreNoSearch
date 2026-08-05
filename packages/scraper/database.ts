@@ -185,6 +185,14 @@ export async function hasCandidateBeenSent(
   }
 }
 
+/**
+ * Records that a candidate was sent to a set of recipients.
+ *
+ * One statement for every recipient. This was a loop issuing one INSERT per
+ * email, so a campaign with M recipients cost M round trips per candidate; the
+ * API's copy of this function was converted to an UNNEST some time ago and this
+ * one was left behind.
+ */
 export async function logOutreachSent(
   profileUrl: string,
   emails: string[],
@@ -195,14 +203,13 @@ export async function logOutreachSent(
 
   const client = await pool.connect();
   try {
-    const query = `
-      INSERT INTO outreach_history (profile_url, recipient_email, company_name, job_name)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (profile_url, recipient_email, company_name) DO NOTHING
-    `;
-    for (const email of emails) {
-      await client.query(query, [profileUrl, email, companyName, jobName]);
-    }
+    await client.query(
+      `INSERT INTO outreach_history (profile_url, recipient_email, company_name, job_name)
+       SELECT $1, e.email, $3, $4
+       FROM   unnest($2::text[]) AS e(email)
+       ON CONFLICT (profile_url, recipient_email, company_name) DO NOTHING`,
+      [profileUrl, emails, companyName, jobName],
+    );
   } finally {
     client.release();
   }
@@ -230,30 +237,34 @@ export async function getSentCandidatesBatch(
   }
 }
 
+/** Hard ceiling on getAllCandidateNames, so an omitted limit cannot pull the
+ *  whole table into process memory. */
+const MAX_CANDIDATE_NAMES = 50_000;
+
 export async function getAllCandidateNames(limit?: number): Promise<string[]> {
   const client = await pool.connect();
   try {
-    const limitClause = limit ? `LIMIT ${limit}` : '';
-    // Select distinct names that are not placeholders or "Unknown"
+    // None of these predicates is indexable, so this is a sequential scan plus
+    // a sort plus a dedup over the whole table however it is written \u2014 but the
+    // result set is now bounded. Previously an undefined `limit` produced no
+    // LIMIT clause at all and every distinct name was materialised into a JS
+    // array. The limit is also a bind parameter now rather than interpolated.
     const query = `
-      SELECT DISTINCT c.name 
+      SELECT DISTINCT c.name
       FROM candidates c
-      WHERE c.name IS NOT NULL 
-        AND c.name != 'Unknown' 
-        AND length(c.name) > 2 
+      WHERE c.name IS NOT NULL
+        AND c.name != 'Unknown'
+        AND length(c.name) > 2
         AND c.name ~ '[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uAC00-\uD7AF]'
         AND c.name NOT LIKE '%Filtered Candidates%'
         AND c.name NOT LIKE '%Candidate Search%'
         AND c.name NOT LIKE '%Archive%'
         AND c.name NOT LIKE '%.%.%'
-        -- AND NOT EXISTS (
-        --    SELECT 1 FROM candidates_upgraded cu WHERE cu.name = c.name
-        -- )
-      ORDER BY c.name ASC 
-      ${limitClause}
+      ORDER BY c.name ASC
+      LIMIT $1
     `;
-    const res = await client.query(query);
-    return res.rows.map((r) => r.name);
+    const res = await client.query(query, [Math.min(limit ?? MAX_CANDIDATE_NAMES, MAX_CANDIDATE_NAMES)]);
+    return res.rows.map((r) => r.name as string);
   } finally {
     client.release();
   }
