@@ -491,24 +491,30 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
       conditions.push(`(${locConditions.join(' OR ')})`);
     }
 
-    // B14: the expression below is served by idx_cu_total_exp_months
-    // (migration 003), so it is an index lookup rather than a per-row function
-    // call over 5.6M rows. The expression must stay character-identical to the
-    // one in the index definition or the planner will ignore it.
+    // Reads the materialised column added by migration 004, served by
+    // idx_cu_total_exp_months_col.
     //
-    // Deliberately NOT the existing `experience_months` column: that one is
+    // This previously called calculate_total_experience_months(experience)
+    // inline. Even with an expression index the plpgsql function was
+    // re-evaluated on every bitmap recheck — ~24us per call, and a broad search
+    // rechecks over 100,000 rows. Materialising it turns the filter into a
+    // plain indexed integer comparison.
+    //
+    // Deliberately NOT the pre-existing `experience_months` column: that one is
     // generated with substring(), which captures only the FIRST match, so it
-    // measures the first-listed role's duration. This function sums every role.
-    // On a 500-row sample the two agreed on 17% of rows — swapping them would
+    // measures the first-listed role's duration. This one sums every role. On a
+    // 500-row sample the two agreed on 17% of rows, so swapping them would
     // silently redefine what minExp/maxExp mean.
+    //
+    // Kept correct by the set_total_experience_months trigger.
     if (params.minExp !== undefined) {
-      conditions.push(`calculate_total_experience_months(experience) >= $${paramIndex}`);
+      conditions.push(`total_experience_months >= $${paramIndex}`);
       values.push(params.minExp * 12);
       paramIndex++;
     }
 
     if (params.maxExp !== undefined) {
-      conditions.push(`calculate_total_experience_months(experience) <= $${paramIndex}`);
+      conditions.push(`total_experience_months <= $${paramIndex}`);
       values.push(params.maxExp * 12);
       paramIndex++;
     }
