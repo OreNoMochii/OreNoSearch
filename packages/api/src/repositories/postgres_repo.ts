@@ -512,13 +512,13 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
 
     // MUST terms (AND)
     if (params.must && params.must.length > 0) {
-      const mustQueries = params.must.map(toTsQueryPhrase).filter(Boolean);
+      const mustQueries = Array.from(new Set(params.must.map(toTsQueryPhrase).filter(Boolean)));
       if (mustQueries.length > 0) tsqueryParts.push(`(${mustQueries.join(' & ')})`);
     }
 
     // SHOULD terms (OR)
     if (params.should && params.should.length > 0) {
-      const shouldQueries = params.should.map(toTsQueryPhrase).filter(Boolean);
+      const shouldQueries = Array.from(new Set(params.should.map(toTsQueryPhrase).filter(Boolean)));
       if (shouldQueries.length > 0) tsqueryParts.push(`(${shouldQueries.join(' | ')})`);
     }
 
@@ -526,14 +526,14 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     if (params.andGroups && params.andGroups.length > 0) {
       for (const group of params.andGroups) {
         if (group.length === 0) continue;
-        const groupQueries = group.map(toTsQueryPhrase).filter(Boolean);
+        const groupQueries = Array.from(new Set(group.map(toTsQueryPhrase).filter(Boolean)));
         if (groupQueries.length > 0) tsqueryParts.push(`(${groupQueries.join(' | ')})`);
       }
     }
 
     // MUST NOT terms (NOT)
     if (params.mustNot && params.mustNot.length > 0) {
-      const notQueries = params.mustNot.map(toTsQueryPhrase).filter(Boolean);
+      const notQueries = Array.from(new Set(params.mustNot.map(toTsQueryPhrase).filter(Boolean)));
       if (notQueries.length > 0) tsqueryParts.push(`!(${notQueries.join(' | ')})`);
     }
 
