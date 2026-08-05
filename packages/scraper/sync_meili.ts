@@ -1,7 +1,7 @@
 import parseArgs from 'minimist';
 import { Meilisearch } from 'meilisearch';
+import type { PoolClient } from 'pg';
 import pool from './database';
-import fs from 'fs';
 
 const args = parseArgs(process.argv.slice(2));
 const clearIndex = args.clear || false;
@@ -47,6 +47,39 @@ function getMonthsInCurrentRole(experience?: string): number {
   }
 
   return months;
+}
+
+/**
+ * Refreshes the location snapshot that backs GET /api/locations.
+ *
+ * candidate_location_counts (migration 006) is a materialised view, so regions
+ * introduced by a scrape do not reach the filter UI until it is rebuilt. This
+ * is the natural hook: the sync runs after the scraper has finished writing,
+ * and it already holds a connection.
+ *
+ * CONCURRENTLY keeps the view readable while it rebuilds. Advisory — a failure
+ * here means a slightly stale filter list, never a failed sync.
+ */
+async function refreshLocationCounts(client: PoolClient): Promise<void> {
+  try {
+    const exists = await client.query(
+      `SELECT 1 FROM pg_class WHERE relname = 'candidate_location_counts' AND relkind = 'm' LIMIT 1`,
+    );
+    if ((exists.rowCount ?? 0) === 0) {
+      console.warn(
+        '[locations] candidate_location_counts not found — skipping refresh. ' +
+          'Apply packages/scraper/migrations/006_location_counts_matview.sql.',
+      );
+      return;
+    }
+
+    console.log('Refreshing location counts (materialized view)...');
+    const started = Date.now();
+    await client.query('REFRESH MATERIALIZED VIEW CONCURRENTLY candidate_location_counts');
+    console.log(`Location counts refreshed in ${Date.now() - started}ms.`);
+  } catch (e: any) {
+    console.warn(`Warning: could not refresh location counts: ${e.message}`);
+  }
 }
 
 async function syncPostgresToMeili() {
@@ -160,6 +193,8 @@ async function syncPostgresToMeili() {
     console.log('Indexing tasks submitted to Meilisearch.');
     console.log('Meilisearch will index these documents asynchronously.');
     console.log('You can check progress via health/stats endpoints.');
+
+    await refreshLocationCounts(client);
   } catch (error) {
     console.error('Error during synchronization:', error);
   } finally {

@@ -1,7 +1,7 @@
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { config } from '../config';
 import { toTsQueryPhrase } from '../core/tsquery';
-import { logError, logWarn } from '../utils/logger';
+import { logError, logInfo, logWarn } from '../utils/logger';
 
 /**
  * Connection pool for the golden database.
@@ -743,13 +743,14 @@ export async function getAvailableLocations(): Promise<string[]> {
   return inFlight;
 }
 
-async function queryAvailableLocations(): Promise<string[]> {
-  const client = await pool.connect();
-  try {
-    // Consolidated top-level regions (Tokyo, Kanagawa, Osaka, Singapore, etc.)
-    const query = `
-            WITH normalized AS (
-              SELECT 
+/**
+ * Region mapping, applied to one row per DISTINCT location.
+ *
+ * Kept in application code rather than baked into the materialised view: these
+ * are business rules that change (a new city, a renamed region), and changing
+ * them here needs a deploy, not a schema migration.
+ */
+const LOCATION_REGION_CASE = `
                 CASE
                   WHEN location ILIKE '%tokyo%' THEN 'Tokyo'
                   WHEN location ILIKE '%kanagawa%' OR location ILIKE '%yokohama%' OR location ILIKE '%kawasaki%' OR location ILIKE '%fujisawa%' THEN 'Kanagawa'
@@ -773,20 +774,108 @@ async function queryAvailableLocations(): Promise<string[]> {
                   WHEN location ILIKE '%malaysia%' THEN 'Malaysia'
                   WHEN location ILIKE '%japan%' THEN 'Japan'
                   ELSE trim(split_part(location, ',', 1))
-                END AS display_location,
-                count(*) as cnt
-              FROM candidates_upgraded
-              WHERE location IS NOT NULL AND location != ''
-              GROUP BY location
+                END`;
+
+/**
+ * Rolls per-location counts up into the region list.
+ *
+ * `AS MATERIALIZED` is load-bearing, not decoration. Without it the planner
+ * inlines the CTE and pushes the outer
+ *
+ *     WHERE display_location IS NOT NULL AND display_location <> ''
+ *
+ * down into the scan — and since `display_location` IS the CASE expression, the
+ * whole 21-branch CASE then appears twice in the scan's Filter and is evaluated
+ * twice per input row. Fencing the CTE halves the work (measured on the 19,003
+ * row source: 486 ms -> 170 ms).
+ *
+ * @param source table or view providing (location, cnt)
+ */
+const regionRollupQuery = (source: string) => `
+            WITH normalized AS MATERIALIZED (
+              SELECT ${LOCATION_REGION_CASE} AS display_location, cnt
+              FROM ${source}
             )
-            SELECT display_location, SUM(cnt)::int as total
+            SELECT display_location, SUM(cnt)::int AS total
             FROM normalized
-            WHERE display_location IS NOT NULL AND display_location != ''
+            WHERE display_location IS NOT NULL AND display_location <> ''
             GROUP BY display_location
             HAVING SUM(cnt) >= 100
-            ORDER BY total DESC;
-        `;
-    const res = await client.query(query);
+            ORDER BY total DESC`;
+
+/** Materialised per-location counts. See migration 006. */
+const LOCATION_COUNTS_MATVIEW = 'candidate_location_counts';
+
+/** Live equivalent of the matview, for the fallback path. */
+const LOCATION_COUNTS_INLINE = `(
+              SELECT location, count(*)::bigint AS cnt
+              FROM candidates_upgraded
+              WHERE location IS NOT NULL AND location <> ''
+              GROUP BY location
+            ) AS live_counts`;
+
+/**
+ * Whether candidate_location_counts exists.
+ *
+ * Checked once and remembered: the answer only changes when a migration runs,
+ * and this is on the cold path of a user-facing request.
+ */
+let matviewAvailable: boolean | null = null;
+
+async function hasLocationMatview(client: PoolClient): Promise<boolean> {
+  if (matviewAvailable !== null) return matviewAvailable;
+  const res = await client.query(
+    `SELECT 1 FROM pg_class WHERE relname = $1 AND relkind = 'm' LIMIT 1`,
+    [LOCATION_COUNTS_MATVIEW],
+  );
+  matviewAvailable = (res.rowCount ?? 0) > 0;
+  if (!matviewAvailable) {
+    logWarn('location_matview_missing', {
+      matview: LOCATION_COUNTS_MATVIEW,
+      impact: 'falling back to the live aggregate — ~2.4s per cold load instead of ~170ms',
+      fix: 'apply packages/scraper/migrations/006_location_counts_matview.sql',
+    });
+  }
+  return matviewAvailable;
+}
+
+/**
+ * Refreshes the location snapshot.
+ *
+ * The matview does not see rows added since it was last built, so a scrape that
+ * introduces a new region will not surface it in the filter UI until this runs.
+ * CONCURRENTLY keeps the view readable throughout — it needs the unique index
+ * migration 006 creates.
+ *
+ * Returns false when the matview is not installed, so callers can treat this as
+ * advisory rather than a failure.
+ */
+export async function refreshLocationCounts(): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    if (!(await hasLocationMatview(client))) return false;
+    const started = Date.now();
+    // Not a parameterisable position; the identifier is a module constant.
+    await client.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${LOCATION_COUNTS_MATVIEW}`);
+    logInfo('location_matview_refreshed', { durationMs: Date.now() - started });
+    invalidateLocationCache();
+    return true;
+  } finally {
+    client.release();
+  }
+}
+
+async function queryAvailableLocations(): Promise<string[]> {
+  const client = await pool.connect();
+  try {
+    // Reads the 19,003-row snapshot rather than aggregating 5,661,466 rows on
+    // the request. Falls back to the live aggregate when the matview has not
+    // been installed, so the endpoint degrades in speed rather than failing.
+    const source = (await hasLocationMatview(client))
+      ? LOCATION_COUNTS_MATVIEW
+      : LOCATION_COUNTS_INLINE;
+
+    const res = await client.query(regionRollupQuery(source));
     // Deliberately does NOT assign cachedLocations here: getAvailableLocations
     // owns the cache and bumps cachedAt with it. Writing from both places made
     // a failed refresh briefly visible as a fresh one.
