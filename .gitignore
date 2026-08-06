@@ -82,3 +82,15 @@ Thumbs.db
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Local scratch probes — these held plaintext dev DB credentials.
+#
+# Listed by exact name rather than as test_*.ts / test_*.js: those patterns
+# match at any depth, so they would have shadowed the tracked test_search.ts
+# and test_search.js at the repo root, and silently hidden any future
+# packages/api/src/test_helpers.ts. Real suites use the NAME.test.ts
+# convention, which none of this touches.
+/query_test_explain.ts
+/query_test_explain2.ts
+/test_casing.ts
+/test_tsquery.js

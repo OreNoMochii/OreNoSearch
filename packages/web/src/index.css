@@ -1,206 +1,225 @@
-@import './styles/tokens.css';
+@import 'tailwindcss';
+
+/* ============================================================================
+   Design tokens
+   ============================================================================
+
+   One accent, not three.
+
+   The previous palette carried violet AND teal AND rose AND amber as
+   simultaneous accents, which left nothing quiet enough for the accents to
+   read against — every element competed. This is a single warm sand
+   (--accent) on a near-neutral ground, with hue reserved for the two things
+   that genuinely need to be distinguishable at a glance: destructive actions
+   and positive state.
+
+   Every colour below is a semantic role, never a raw hex at the call site.
+   That indirection is what makes the light theme possible: components ask for
+   `bg-surface`, and the theme decides what that means.
+   ========================================================================= */
 
 :root {
-  --accent-gradient: linear-gradient(135deg, var(--accent-500), var(--success-fg));
+  color-scheme: dark;
+
+  /* ── Surfaces, darkest to lightest ─────────────────────────────────── */
+  --c-base: #0a0a0a; /* app ground, modal chrome */
+  --c-panel: #0f0f0f; /* sidebars */
+  --c-raised: #141414; /* cards */
+  --c-input: #1a1a1a; /* inputs, chips, wells */
+  --c-input-hover: #212121;
+  --c-border: #222222;
+  --c-border-strong: #2e2e2e;
+
+  /* ── Text ──────────────────────────────────────────────────────────── */
+  --c-text: #f0f0f0;
+  --c-text-2: #9e9e9e;
+  --c-text-3: #6e6e6e;
+
+  /* ── Accent: warm sand ─────────────────────────────────────────────── */
+  --c-accent: #c8a97e;
+  --c-accent-hover: #d4bc91;
+  --c-accent-soft: #c8a97e1a; /* 10% tint for chips and avatars */
+  --c-accent-line: #c8a97e33;
+  /* Text that sits ON the accent fill. Sand is light, so it needs dark ink —
+     white on #C8A97E is roughly 2:1 and fails badly. */
+  --c-on-accent: #17140f;
+
+  /* ── Semantic state. Not accents; used only where meaning demands. ── */
+  --c-danger: #d98282;
+  --c-danger-soft: #d9828214;
+  --c-positive: #8fb996;
+  --c-positive-soft: #8fb99614;
+
+  --c-focus: #c8a97e;
 }
 
-* {
-  box-sizing: border-box;
-}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
 
-body {
-  margin: 0;
-  padding: 0;
-  font-family: var(--font-sans);
-  background-color: var(--surface-base);
-  background: radial-gradient(circle at top right, var(--surface-overlay), var(--surface-base) 60%);
-  color: var(--text-primary);
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-}
+    /* Warm off-whites rather than pure white, so the sand accent still reads
+       as warm rather than muddy against a cold ground. */
+    --c-base: #f7f5f2;
+    --c-panel: #fbfaf8;
+    --c-raised: #ffffff;
+    --c-input: #f1eee9;
+    --c-input-hover: #e9e5de;
+    --c-border: #e2ddd5;
+    --c-border-strong: #d0c9be;
 
-h1,
-h2,
-h3,
-h4,
-h5 {
-  margin: 0;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
+    --c-text: #1c1a17;
+    --c-text-2: #5c574f;
+    --c-text-3: #8a8377;
 
-input,
-textarea,
-button {
-  font-family: inherit;
-  color: inherit;
-}
+    /* Darkened so it clears 4.5:1 on a light ground — the dark-theme sand is
+       far too pale to read as text here. */
+    --c-accent: #8a6a3b;
+    --c-accent-hover: #6f5430;
+    --c-accent-soft: #8a6a3b14;
+    --c-accent-line: #8a6a3b33;
+    --c-on-accent: #ffffff;
 
-.app-container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 3rem 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 2.5rem;
-}
+    --c-danger: #a8443f;
+    --c-danger-soft: #a8443f12;
+    --c-positive: #3f6b4a;
+    --c-positive-soft: #3f6b4a12;
 
-.header {
-  text-align: center;
-  margin-bottom: 1rem;
-}
-
-.header h1 {
-  font-size: 3rem;
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 0.5rem;
-}
-
-.header p {
-  color: var(--text-muted);
-  font-size: 1.1rem;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.glass-panel {
-  background: var(--surface-overlay);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border-subtle);
-  border-radius: 1.25rem;
-  padding: 2rem;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-}
-
-.input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.input-group label {
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.input-helper {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  margin-top: -0.25rem;
-}
-
-textarea,
-input[type='number'],
-input[type='text'] {
-  width: 100%;
-  background: var(--surface-input);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  padding: 0.875rem 1rem;
-  font-size: 1rem;
-  transition: all 0.2s ease;
-  resize: vertical;
-}
-
-textarea:focus,
-input:focus {
-  outline: none;
-  border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
-}
-
-/* Animations */
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+    --c-focus: #8a6a3b;
   }
-  to {
+}
+
+/* Explicit choice always wins over the OS preference, in both directions. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --c-base: #0a0a0a;
+  --c-panel: #0f0f0f;
+  --c-raised: #141414;
+  --c-input: #1a1a1a;
+  --c-input-hover: #212121;
+  --c-border: #222222;
+  --c-border-strong: #2e2e2e;
+  --c-text: #f0f0f0;
+  --c-text-2: #9e9e9e;
+  --c-text-3: #6e6e6e;
+  --c-accent: #c8a97e;
+  --c-accent-hover: #d4bc91;
+  --c-accent-soft: #c8a97e1a;
+  --c-accent-line: #c8a97e33;
+  --c-on-accent: #17140f;
+  --c-danger: #d98282;
+  --c-danger-soft: #d9828214;
+  --c-positive: #8fb996;
+  --c-positive-soft: #8fb99614;
+  --c-focus: #c8a97e;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --c-base: #f7f5f2;
+  --c-panel: #fbfaf8;
+  --c-raised: #ffffff;
+  --c-input: #f1eee9;
+  --c-input-hover: #e9e5de;
+  --c-border: #e2ddd5;
+  --c-border-strong: #d0c9be;
+  --c-text: #1c1a17;
+  --c-text-2: #5c574f;
+  --c-text-3: #8a8377;
+  --c-accent: #8a6a3b;
+  --c-accent-hover: #6f5430;
+  --c-accent-soft: #8a6a3b14;
+  --c-accent-line: #8a6a3b33;
+  --c-on-accent: #ffffff;
+  --c-danger: #a8443f;
+  --c-danger-soft: #a8443f12;
+  --c-positive: #3f6b4a;
+  --c-positive-soft: #3f6b4a12;
+  --c-focus: #8a6a3b;
+}
+
+/* Expose the tokens to Tailwind as utilities (bg-surface, text-muted, …).
+   Each maps to a var, so a theme switch repaints without regenerating CSS. */
+@theme inline {
+  --color-base: var(--c-base);
+  --color-panel: var(--c-panel);
+  --color-raised: var(--c-raised);
+  --color-input: var(--c-input);
+  --color-input-hover: var(--c-input-hover);
+  --color-line: var(--c-border);
+  --color-line-strong: var(--c-border-strong);
+
+  --color-ink: var(--c-text);
+  --color-ink-2: var(--c-text-2);
+  --color-ink-3: var(--c-text-3);
+
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-line: var(--c-accent-line);
+  --color-on-accent: var(--c-on-accent);
+
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-positive: var(--c-positive);
+  --color-positive-soft: var(--c-positive-soft);
+
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Query text is code — monospace makes the boolean structure legible. */
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--c-base);
+    color: var(--c-text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Repaint smoothly on theme change, but never animate for someone who has
+     asked the OS to reduce motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    body {
+      transition:
+        background-color 180ms ease,
+        color 180ms ease;
+    }
+  }
+
+  /* One visible focus treatment everywhere, rather than per-component. */
+  :focus-visible {
+    outline: 2px solid var(--c-focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::placeholder {
+    color: var(--c-text-3);
     opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-slide-up {
-  animation: slideUp 0.4s ease forwards;
-}
-
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* Responsive Grid Layout */
-.main-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 2rem;
-}
-
-@media (min-width: 1024px) {
-  .main-grid {
-    grid-template-columns: 350px 1fr;
-    align-items: start;
-  }
-}
-
-@media (max-width: 768px) {
-  .app-container {
-    padding: 1.5rem 1rem;
-    gap: 1.5rem;
   }
 
-  .header h1 {
-    font-size: 2.25rem;
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
   }
-
-  .glass-panel {
-    padding: 1.25rem;
-    border-radius: 1rem;
+  ::-webkit-scrollbar-track {
+    background: transparent;
   }
-}
-
-/* Centered layout before search results appear */
-.single-column-centered {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-}
-
-.single-column-centered > * {
-  width: 100%;
-  max-width: 800px;
-}
-
-/* Skip to main content link for accessibility */
-.skip-link {
-  position: absolute;
-  top: -100px;
-  left: 0;
-  background: var(--accent-500);
-  color: white;
-  padding: 1rem;
-  z-index: 9999;
-  text-decoration: none;
-  font-weight: 600;
-  transition: top 0.2s ease;
-}
-.skip-link:focus {
-  top: 0;
+  ::-webkit-scrollbar-thumb {
+    background: var(--c-border-strong);
+    border-radius: 5px;
+    border: 2px solid var(--c-base);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--c-text-3);
+  }
 }
