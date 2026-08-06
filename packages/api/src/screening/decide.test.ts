@@ -141,7 +141,7 @@ describe('decision', () => {
         verifiedFatal: 1,
         verifiedSerious: 0,
         discarded: 0,
-        usage: { promptTokens: 0, completionTokens: 0, calls: 1 },
+        usage: { promptTokens: 0, completionTokens: 0, calls: 1, usd: 0 },
         challenge: {
           findings: [{ objection: 'No new-business experience', quote: 'q', severity: 'fatal' }],
           would_reject: true,
@@ -166,7 +166,7 @@ describe('decision', () => {
         verifiedFatal: 0,
         verifiedSerious: 0,
         discarded: 0,
-        usage: { promptTokens: 0, completionTokens: 0, calls: 1 },
+        usage: { promptTokens: 0, completionTokens: 0, calls: 1, usd: 0 },
         challenge: { findings: [], would_reject: false },
       },
     });

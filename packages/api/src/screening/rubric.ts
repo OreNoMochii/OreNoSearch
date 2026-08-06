@@ -17,7 +17,7 @@
  * and correct in a minute.
  */
 import { JdRubric } from './schemas';
-import { callStage, modelFor, type TokenUsage } from './llm';
+import { callStage, emptyUsage, modelFor, type TokenUsage } from './llm';
 import { getRubric, saveRubric, hashJd } from '../repositories/screening_repo';
 import { logInfo, logWarn } from '../utils/logger';
 
@@ -117,7 +117,7 @@ export async function compileRubric(params: {
         rubric: stored.rubric,
         approved: stored.approvedAt !== null,
         fromCache: true,
-        usage: { promptTokens: 0, completionTokens: 0, calls: 0 },
+        usage: emptyUsage(),
       };
     }
   }

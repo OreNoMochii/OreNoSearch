@@ -17,6 +17,7 @@
 import { z } from 'zod';
 import { getClient, normaliseModelId } from '../core/llm_client';
 import { config } from '../config';
+import { findModel, needsLegacyJsonMode, estimateCost } from '../core/model_catalog';
 import { logWarn } from '../utils/logger';
 import { MinGapRateLimiter } from '../utils/rate_limiter';
 
@@ -51,18 +52,28 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   calls: number;
+  /**
+   * Running spend in USD, where the provider bills per token.
+   *
+   * NVIDIA NIM contributes 0 because it is not a per-token product — see
+   * core/model_catalog.ts. A campaign mixing both providers therefore reports
+   * the DeepInfra portion of its cost, which is the only part that has a price.
+   */
+  usd: number;
 }
 
 export const emptyUsage = (): TokenUsage => ({
   promptTokens: 0,
   completionTokens: 0,
   calls: 0,
+  usd: 0,
 });
 
 export function addUsage(into: TokenUsage, from: TokenUsage): void {
   into.promptTokens += from.promptTokens;
   into.completionTokens += from.completionTokens;
   into.calls += from.calls;
+  into.usd += from.usd;
 }
 
 export interface StageCallOptions<T> {
@@ -126,24 +137,36 @@ export async function callStage<T>(opts: StageCallOptions<T>): Promise<StageResu
     try {
       await limiter.acquire();
 
+      const entry = findModel(model);
+
       const completion = await client.chat.completions.create({
         model: normaliseModelId(model),
         temperature: opts.temperature ?? 0,
         top_p: 1,
         seed: SCREENING_SEED + (opts.seedOffset ?? 0),
-        max_tokens: opts.maxTokens ?? 2048,
+        // Reasoning models emit a long hidden trace before the answer; a 2k
+        // budget truncates them mid-thought and the JSON never arrives.
+        max_tokens: opts.maxTokens ?? (entry?.reasoning ? 16_384 : 2048),
         messages: [
           { role: 'system', content: opts.system },
           { role: 'user', content: opts.user },
         ],
-        // Asked for rather than relied upon: not every NIM model honours it,
-        // which is why extractJson exists as well.
-        response_format: { type: 'json_object' },
+        // Older models reject response_format outright. The catalogue records
+        // which, replacing the substring matching this used to rely on.
+        //
+        // Asked for rather than relied upon even where supported: not every NIM
+        // model honours it, which is why extractJson exists as well.
+        ...(needsLegacyJsonMode(model)
+          ? {}
+          : { response_format: { type: 'json_object' as const } }),
       });
 
+      const promptTokens = completion.usage?.prompt_tokens ?? 0;
+      const completionTokens = completion.usage?.completion_tokens ?? 0;
       usage.calls += 1;
-      usage.promptTokens += completion.usage?.prompt_tokens ?? 0;
-      usage.completionTokens += completion.usage?.completion_tokens ?? 0;
+      usage.promptTokens += promptTokens;
+      usage.completionTokens += completionTokens;
+      usage.usd += estimateCost(model, promptTokens, completionTokens).usd ?? 0;
 
       const content = completion.choices[0]?.message?.content ?? '';
       let parsedJson: unknown;

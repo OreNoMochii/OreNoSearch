@@ -17,7 +17,7 @@
  */
 import type { ScreenedCandidate } from '../domain/ports';
 import { EvidenceBundle, type JdRubric } from './schemas';
-import { callStage, type TokenUsage } from './llm';
+import { callStage, emptyUsage, type TokenUsage } from './llm';
 import { buildQuotableSource, verifyQuote, type GroundingStatus } from './grounding';
 
 export interface VerifiedFinding {
@@ -106,7 +106,7 @@ export async function extractEvidence(
       findings: [],
       verifiedCount: 0,
       fabricatedCount: 0,
-      usage: { promptTokens: 0, completionTokens: 0, calls: 0 },
+      usage: emptyUsage(),
       ok: true,
     };
   }

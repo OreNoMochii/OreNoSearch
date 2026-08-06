@@ -128,6 +128,7 @@ app.get('/api/queue-status', OutreachController.getQueueStatus);
 app.post('/api/search', SearchController.runSearch);
 app.post('/api/meili/search', SearchController.meiliSearch);
 app.get('/api/locations', SearchController.getLocations);
+app.get('/api/models', SearchController.getModels);
 
 // ── Terminal error handler ──────────────────────────────────────────────────
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

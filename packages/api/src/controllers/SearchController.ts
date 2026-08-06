@@ -6,6 +6,7 @@ import {
 } from '../repositories/postgres_repo';
 import { meiliClient, ALLOWED_INDEXES } from '../repositories/meilisearch_repo';
 import { SqlSearchRequest, MeiliProxyRequest } from '../core/schemas';
+import { MODEL_CATALOG, PRICES_VERIFIED_ON } from '../core/model_catalog';
 import { logInfo, logError } from '../utils/logger';
 
 export class SearchController {
@@ -55,6 +56,30 @@ export class SearchController {
       // details to the client.
       return res.status(500).json({ error: 'Search failed' });
     }
+  }
+
+  /**
+   * GET /api/models — the model catalogue the UI renders its picker from.
+   *
+   * The picker used to be a hardcoded <option> list in App.tsx that could
+   * silently drift from what the backend accepts. Serving it means one list.
+   */
+  static getModels(_req: Request, res: Response): Response {
+    return res.json({
+      pricesVerifiedOn: PRICES_VERIFIED_ON,
+      models: MODEL_CATALOG.map((m) => ({
+        id: m.id,
+        provider: m.provider,
+        label: m.label,
+        family: m.family,
+        inputPer1M: m.inputPer1M,
+        outputPer1M: m.outputPer1M,
+        contextTokens: m.contextTokens,
+        goodFor: m.goodFor,
+        reasoning: m.reasoning ?? false,
+        notes: m.notes,
+      })),
+    });
   }
 
   /** GET /api/locations — distinct normalised locations for the filter UI. */

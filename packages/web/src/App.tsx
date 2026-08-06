@@ -14,6 +14,7 @@ import { OutreachForm } from './components/OutreachForm';
 import { CandidateCard } from './components/CandidateCard';
 import { LocationPicker } from './components/LocationPicker';
 import { ExplainableAction } from './components/ExplainableAction';
+import { useModelCatalog, formatCost } from './hooks/useModelCatalog';
 
 const API_BASE_URL = '';
 
@@ -125,8 +126,35 @@ function App() {
   const [screeningEngine, setScreeningEngine] = useState(
     () => localStorage.getItem('outreach_engine') || 'llm',
   );
-  const [selectedProvider, setSelectedProvider] = useState('deepinfra');
-  const [selectedModel, setSelectedModel] = useState('deepseek-ai/DeepSeek-V3.2');
+  const [selectedProvider, setSelectedProvider] = useState(
+    () => localStorage.getItem('outreach_provider') || 'deepinfra',
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    () => localStorage.getItem('outreach_model') || 'deepseek-ai/DeepSeek-V3.2',
+  );
+
+  // Served by /api/models so the picker and the backend cannot disagree about
+  // which ids exist.
+  const modelCatalog = useModelCatalog();
+  const providerModels = useMemo(
+    () => modelCatalog.models.filter((m) => m.provider === selectedProvider),
+    [modelCatalog.models, selectedProvider],
+  );
+  const activeModel = useMemo(
+    () => modelCatalog.models.find((m) => m.id === selectedModel),
+    [modelCatalog.models, selectedModel],
+  );
+
+  // Keep the selection valid. Switching provider — or loading a catalogue that
+  // no longer carries a previously-saved id — would otherwise leave the select
+  // showing one model while `selectedModel` held another, and the campaign
+  // would run on the stale one.
+  useEffect(() => {
+    if (!modelCatalog.loaded || providerModels.length === 0) return;
+    if (!providerModels.some((m) => m.id === selectedModel)) {
+      setSelectedModel(providerModels[0].id);
+    }
+  }, [modelCatalog.loaded, providerModels, selectedModel]);
   const [adjacentRoles, setAdjacentRoles] = useState(
     () => localStorage.getItem('outreach_adjacent') || '',
   );
@@ -178,6 +206,8 @@ function App() {
       localStorage.setItem('outreach_jobName', jobName);
       localStorage.setItem('outreach_companyName', companyName);
       localStorage.setItem('outreach_engine', screeningEngine);
+      localStorage.setItem('outreach_provider', selectedProvider);
+      localStorage.setItem('outreach_model', selectedModel);
       localStorage.setItem('outreach_bypassDeduplication', bypassDeduplication.toString());
       localStorage.setItem('outreach_useCompanyIntel', useCompanyIntel.toString());
       localStorage.setItem('outreach_usePipeline', usePipeline.toString());
@@ -192,6 +222,8 @@ function App() {
     outreachJd,
     outreachEmail,
     screeningEngine,
+    selectedProvider,
+    selectedModel,
     adjacentRoles,
     jobName,
     companyName,
@@ -978,13 +1010,10 @@ function App() {
                     <select
                       value={selectedProvider}
                       onChange={(e) => {
-                        const newProv = e.target.value;
-                        setSelectedProvider(newProv);
-                        if (newProv === 'nvidia') {
-                          setSelectedModel('nvidia:meta/llama-3.1-70b-instruct');
-                        } else {
-                          setSelectedModel('deepseek-ai/DeepSeek-V3.2');
-                        }
+                        // The model is reconciled by the effect above against
+                        // whatever the catalogue actually offers for the new
+                        // provider, so no hardcoded id is needed here.
+                        setSelectedProvider(e.target.value);
                       }}
                       style={{
                         background: 'var(--surface-input)',
@@ -1025,39 +1054,32 @@ function App() {
                         cursor: 'pointer',
                       }}
                     >
-                      {selectedProvider === 'deepinfra' && (
-                        <>
-                          <option
-                            value="deepseek-ai/DeepSeek-V3.2"
-                            style={{ background: 'var(--surface-overlay)' }}
-                          >
-                            DeepSeek V3.2
-                          </option>
-                          <option
-                            value="deepseek-ai/DeepSeek-R1"
-                            style={{ background: 'var(--surface-overlay)' }}
-                          >
-                            DeepSeek R1
-                          </option>
-                        </>
-                      )}
-                      {selectedProvider === 'nvidia' && (
-                        <>
-                          <option
-                            value="nvidia:meta/llama-3.1-70b-instruct"
-                            style={{ background: 'var(--surface-overlay)' }}
-                          >
-                            NVIDIA NIM: Llama 3.1 70B
-                          </option>
-                          <option
-                            value="nvidia:meta/llama-3.1-405b-instruct"
-                            style={{ background: 'var(--surface-overlay)' }}
-                          >
-                            NVIDIA NIM: Llama 3.1 405B
-                          </option>
-                        </>
-                      )}
+                      {providerModels.map((m) => (
+                        <option
+                          key={m.id}
+                          value={m.id}
+                          style={{ background: 'var(--surface-overlay)' }}
+                        >
+                          {m.label}
+                          {m.inputPer1M !== null
+                            ? ` — $${m.inputPer1M.toFixed(2)}/$${m.outputPer1M?.toFixed(2)} per 1M`
+                            : ''}
+                          {m.reasoning ? ' · reasoning' : ''}
+                        </option>
+                      ))}
                     </select>
+                    {activeModel && (
+                      <span className="input-helper" style={{ marginTop: '0.4rem' }}>
+                        {formatCost(activeModel)}
+                        {activeModel.contextTokens
+                          ? ` · ${Math.round(activeModel.contextTokens / 1000)}k context`
+                          : ''}
+                        {activeModel.notes ? ` · ${activeModel.notes}` : ''}
+                        {modelCatalog.pricesVerifiedOn && activeModel.inputPer1M !== null
+                          ? ` · prices checked ${modelCatalog.pricesVerifiedOn}, verify on deepinfra.com/pricing`
+                          : ''}
+                      </span>
+                    )}
                   </div>
                 </>
               )}
