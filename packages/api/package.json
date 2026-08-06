@@ -9,12 +9,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "format:check": "prettier --check .",
-    "test": "vitest run --exclude \"**/integration.test.ts\"",
+    "test": "vitest run --exclude \"**/integration.test.ts\" --exclude \"**/search_correctness.test.ts\"",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "RUN_INTEGRATION=1 vitest run src/integration.test.ts",
     "eval": "ts-node src/eval/run.ts",
-    "eval:mine": "ts-node src/eval/run.ts mine"
+    "eval:mine": "ts-node src/eval/run.ts mine",
+    "test:search": "RUN_DB_TESTS=1 vitest run src/search_correctness.test.ts"
   },
   "license": "ISC",
   "type": "commonjs",
