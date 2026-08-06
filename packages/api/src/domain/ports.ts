@@ -24,6 +24,17 @@ export interface ScreenedCandidate {
   readonly location?: string;
   readonly headline?: string;
   readonly email?: string;
+
+  // ── Resume text ───────────────────────────────────────────────────────────
+  // These carry the actual evidence a screening engine reasons over, and their
+  // absence was a real defect: normaliseCandidates dropped them, so the tree
+  // scorer computed every text feature over empty strings, and the agentic
+  // pipeline would have had nothing to quote. The SQL projection already
+  // selects all four — they were simply being discarded on the way through.
+  readonly experience?: string;
+  readonly summary?: string;
+  readonly education?: string;
+  readonly skills?: string;
 }
 
 export interface RiskScore {
@@ -84,7 +95,7 @@ export interface ScreeningResult {
 }
 
 export interface ScreeningOptions {
-  readonly engine: 'llm' | 'tree' | 'tree_llm' | 'pipeline';
+  readonly engine: 'llm' | 'tree' | 'tree_llm' | 'pipeline' | 'agentic';
   readonly model: string;
   readonly adjacentRoles?: string;
   readonly topN?: number;

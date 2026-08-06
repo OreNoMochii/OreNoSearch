@@ -512,13 +512,13 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
 
     // MUST terms (AND)
     if (params.must && params.must.length > 0) {
-      const mustQueries = params.must.map(toTsQueryPhrase).filter(Boolean);
+      const mustQueries = Array.from(new Set(params.must.map(toTsQueryPhrase).filter(Boolean)));
       if (mustQueries.length > 0) tsqueryParts.push(`(${mustQueries.join(' & ')})`);
     }
 
     // SHOULD terms (OR)
     if (params.should && params.should.length > 0) {
-      const shouldQueries = params.should.map(toTsQueryPhrase).filter(Boolean);
+      const shouldQueries = Array.from(new Set(params.should.map(toTsQueryPhrase).filter(Boolean)));
       if (shouldQueries.length > 0) tsqueryParts.push(`(${shouldQueries.join(' | ')})`);
     }
 
@@ -526,14 +526,14 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     if (params.andGroups && params.andGroups.length > 0) {
       for (const group of params.andGroups) {
         if (group.length === 0) continue;
-        const groupQueries = group.map(toTsQueryPhrase).filter(Boolean);
+        const groupQueries = Array.from(new Set(group.map(toTsQueryPhrase).filter(Boolean)));
         if (groupQueries.length > 0) tsqueryParts.push(`(${groupQueries.join(' | ')})`);
       }
     }
 
     // MUST NOT terms (NOT)
     if (params.mustNot && params.mustNot.length > 0) {
-      const notQueries = params.mustNot.map(toTsQueryPhrase).filter(Boolean);
+      const notQueries = Array.from(new Set(params.mustNot.map(toTsQueryPhrase).filter(Boolean)));
       if (notQueries.length > 0) tsqueryParts.push(`!(${notQueries.join(' | ')})`);
     }
 
@@ -654,9 +654,10 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     const COUNT_CAP = config.SEARCH_COUNT_CAP;
 
     // We use EXPLAIN to get a blazing-fast estimate of the total matching rows
-    // (which represents the "whole figures" for the UI) without running a full 
+    // (which represents the "whole figures" for the UI) without running a full
     // sequence scan that could take >60s and time out the API.
     const explainQuery = `EXPLAIN SELECT 1 FROM candidates_upgraded ${whereClause}`;
+    const exactCountBoundedQuery = `SELECT count(*)::int AS n FROM (SELECT 1 FROM candidates_upgraded ${whereClause} LIMIT 10000) sub`;
 
     const finalQuery = `
             SELECT ${CANDIDATE_PROJECTION}
@@ -668,10 +669,22 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // skipCount drops the count entirely for callers that never read it.
     let counted = 0;
     if (!params.skipCount) {
-      const explainRes = await client.query(explainQuery, values);
-      const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
-      const match = plan.match(/rows=(\d+)/);
-      counted = match ? parseInt(match[1], 10) : 0;
+      // First try to count up to 10000 accurately. This takes <300ms for broad queries.
+      const exactRes = await client.query(exactCountBoundedQuery, values);
+      const exactCount = exactRes.rows[0].n;
+
+      if (exactCount < 10000) {
+        // Perfectly accurate count!
+        counted = exactCount;
+      } else {
+        // Over 10k, so use the statistical estimate to give the huge number instantly.
+        const explainRes = await client.query(explainQuery, values);
+        const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
+        const match = plan.match(/rows=(\d+)/);
+        const estimate = match ? parseInt(match[1], 10) : 0;
+        // The estimate might be smaller than 10000 due to planner inaccuracies, so we floor it to 10000
+        counted = Math.max(estimate, 10000);
+      }
     }
 
     const res = await client.query(finalQuery, [...values, params.limit]);

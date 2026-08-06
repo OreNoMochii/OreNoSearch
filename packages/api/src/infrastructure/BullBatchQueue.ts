@@ -33,7 +33,7 @@ export interface OutreachJobData {
   topK?: number;
   minExp?: number;
   maxExp?: number;
-  screeningEngine: 'llm' | 'tree' | 'tree_llm';
+  screeningEngine: 'llm' | 'tree' | 'tree_llm' | 'agentic';
   treeTopK?: number;
   useCompanyIntel: boolean;
 }

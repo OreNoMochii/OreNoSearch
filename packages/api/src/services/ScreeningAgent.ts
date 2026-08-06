@@ -2,6 +2,7 @@ import { zodResponseFormat } from 'openai/helpers/zod';
 import { getClient, normaliseModelId } from '../core/llm_client';
 import { logInfo, logWarn } from '../utils/logger';
 import { VerificationMatch, VerificationResponse } from '../core/schemas';
+import { verifyQuotes } from '../screening/grounding';
 import { MinGapRateLimiter } from '../utils/rate_limiter';
 import path from 'path';
 import fs from 'fs';
@@ -10,6 +11,16 @@ import fs from 'fs';
 // NVIDIA NIM's free tier allows roughly 40 requests/minute, hence the 1.5s gap.
 const nvidiaLimiter = new MinGapRateLimiter(1_500);
 const defaultLimiter = new MinGapRateLimiter(100);
+
+/**
+ * Fixed sampling seed.
+ *
+ * Paired with temperature 0 below. Providers that support `seed` then return
+ * the same completion for the same input; those that ignore it are unaffected.
+ * A constant is correct here — screening the same candidate twice should give
+ * the same answer, so there is nothing to vary.
+ */
+const SCREENING_SEED = 42;
 
 const ROLE_CATEGORIES_MAP = {
   'Software Engineering': ['engineer', 'developer', 'tech lead'],
@@ -263,6 +274,19 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
 
         const requestPayload: any = {
           model: cleanModel,
+          // Screening is a judgement that must not change between runs.
+          //
+          // Neither temperature nor seed was set here, so the request used the
+          // provider default (1.0 for OpenAI-compatible endpoints) and the same
+          // candidate against the same JD could flip verdict between runs. The
+          // Python audit path has always sent temperature=0 (see
+          // services/retrieval/llm_client.py); this is the main engine and did
+          // not. Sampling noise was a silent, unmeasured accuracy loss.
+          temperature: 0,
+          top_p: 1,
+          // Best-effort determinism where the provider honours it; ignored
+          // where it does not, so it is safe to send unconditionally.
+          seed: SCREENING_SEED,
           messages: [
             {
               role: 'system',
@@ -329,7 +353,46 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
         }
         const result = parsed.data;
 
-        const isMatch = result.final_verdict.toUpperCase().includes('RETAIN');
+        let isMatch = result.final_verdict.toUpperCase().includes('RETAIN');
+
+        // ── Evidence grounding ──────────────────────────────────────────
+        // The prompt demands verbatim quotes; until now nothing checked that
+        // they existed. A model that invents a supporting quote produced a
+        // confident, well-justified PASS built on nothing.
+        //
+        // Every quote is checked against the candidate's own text. An honest
+        // "No evidence found" is fine — that is the behaviour the prompt asks
+        // for. A quote that is simply not in the profile is a fabrication, and
+        // on this single-call path there is no way to tell how much of the
+        // verdict rested on it, so it vetoes a RETAIN rather than being
+        // silently dropped. Rejections are left alone: fabricated evidence
+        // cannot make a rejection wrong in the direction that costs us.
+        const grounding = verifyQuotes(
+          result.technical_audit.map((a) => a.evidence_quote ?? ''),
+          candidate as Record<string, unknown>,
+        );
+
+        if (isMatch && grounding.hasFabrication) {
+          const fabricated = grounding.quotes
+            .filter((q) => q.status === 'unverified')
+            .map((q) => q.quote.slice(0, 120));
+          logWarn('llm_evidence_not_grounded', {
+            name,
+            model: cleanModel,
+            unverified: grounding.unverified,
+            verified: grounding.verified,
+            samples: fabricated.slice(0, 2),
+          });
+          isMatch = false;
+          return {
+            isMatch: false,
+            reasoning:
+              `Verdict overturned: ${grounding.unverified} of ` +
+              `${grounding.unverified + grounding.verified} cited quotes could not be found ` +
+              `in the candidate profile. Unverifiable evidence cannot support a match.`,
+            auditJson: JSON.stringify({ ...result, _grounding: grounding }, null, 2),
+          };
+        }
 
         // Extract actual reasons for failure from the technical audit
         let rejectionReasons: string[] = [];

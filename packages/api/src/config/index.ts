@@ -98,6 +98,49 @@ const ConfigSchema = z
      */
     MAX_CAMPAIGN_CANDIDATES: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
 
+    // ── Agentic screening ──────────────────────────────────────────────
+    /**
+     * Model per stage role, not one model for everything.
+     *
+     * Extraction is a easy task and should run somewhere cheap; adjudication is
+     * the actual judgement. CHALLENGER should be a DIFFERENT MODEL FAMILY from
+     * ADJUDICATOR — its whole job is to catch what the adjudicator missed, and
+     * a model with the same training and the same blind spots will agree with
+     * it for the same wrong reasons.
+     *
+     * Ids are provider-prefixed (`nvidia:` selects NIM). Confirm they exist in
+     * your NIM catalogue — it changes.
+     */
+    SCREENING_MODEL_COMPILER: z.string().default('nvidia:meta/llama-3.3-70b-instruct'),
+    SCREENING_MODEL_EXTRACTOR: z.string().default('nvidia:meta/llama-3.3-70b-instruct'),
+    SCREENING_MODEL_ADJUDICATOR: z
+      .string()
+      .default('nvidia:nvidia/llama-3.1-nemotron-70b-instruct'),
+    SCREENING_MODEL_CHALLENGER: z.string().default('nvidia:deepseek-ai/deepseek-r1'),
+    SCREENING_MODEL_ESCALATION: z.string().default('nvidia:meta/llama-3.1-405b-instruct'),
+
+    /** Minimum gap between NIM calls. The free tier allows roughly 40/min. */
+    NVIDIA_MIN_GAP_MS: z.coerce.number().int().min(0).default(1_500),
+
+    /**
+     * Weighted competency score, 0-1, at or above which a candidate may PASS.
+     * Below SCREENING_UNCERTAIN_BAND of this, they are rejected outright;
+     * within the band they are returned as UNCERTAIN for review.
+     */
+    SCREENING_PASS_THRESHOLD: z.coerce.number().min(0).max(1).default(0.7),
+    SCREENING_UNCERTAIN_BAND: z.coerce.number().min(0).max(0.5).default(0.12),
+    /** Extra samples taken when a score lands inside the uncertain band. */
+    SCREENING_CONSISTENCY_SAMPLES: z.coerce.number().int().min(1).max(5).default(3),
+    /** Candidates surviving the cheap stages that go on to the LLM stages. */
+    SCREENING_PREFILTER_KEEP: z.coerce.number().int().min(1).max(2000).default(150),
+    /**
+     * Refuse to screen against a rubric no human has approved.
+     *
+     * Off by default so the pipeline is usable immediately; turning it on is
+     * what makes the human-in-the-loop step real.
+     */
+    SCREENING_REQUIRE_APPROVED_RUBRIC: z.coerce.boolean().default(false),
+
     // ── API auth ───────────────────────────────────────────────────────
     API_USER: z.string().min(3),
     API_PASS: z.string().min(8, 'API_PASS must be at least 8 characters'),

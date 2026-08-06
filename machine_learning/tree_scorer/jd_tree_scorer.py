@@ -513,7 +513,9 @@ _COLUMN_ALIASES = {
     "current_company": ("ai_latest_company", "currentCompany"),
     "summary":         ("candidate_summary",),
     "experience":      ("resume_text_excerpt",),
-    "latest_role":     ("ai_latest_role", "latestRole"),
+    # ScreenedCandidate carries the latest role in `headline` (the orchestrator
+    # maps ai_latest_role onto it), so that is the last resort before empty.
+    "latest_role":     ("ai_latest_role", "latestRole", "headline"),
 }
 
 
