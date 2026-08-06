@@ -1,6 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { config } from '../config';
-import { toTsQueryPhrase } from '../core/tsquery';
+import { classifyTerm } from '../core/tsquery';
 import { logError, logInfo, logWarn } from '../utils/logger';
 
 /**
@@ -451,6 +451,51 @@ export interface IlikeSearchParams {
 }
 
 /**
+ * How far an exact count is worth pursuing before falling back to an estimate.
+ *
+ * Below this the count is precise and cheap; above it, locating every matching
+ * row costs seconds, so the planner estimate is used instead and the result is
+ * reported as a floor rather than a figure.
+ */
+const EXACT_COUNT_CEILING = 10_000;
+
+/**
+ * The searchable text, concatenated.
+ *
+ * Used raw for ILIKE matching. Every field is coalesced so the result is never
+ * NULL — a NULL here would make `NOT (blob ILIKE …)` evaluate to NULL and
+ * silently drop the row from a mustNot search rather than keeping it.
+ */
+const SEARCH_BLOB = `(
+                coalesce(name, '') || ' ' ||
+                coalesce(headline, '') || ' ' ||
+                coalesce(latest_role, '') || ' ' ||
+                coalesce(current_company, '') || ' ' ||
+                coalesce(experience, '') || ' ' ||
+                coalesce(summary, '')
+              )`;
+
+/**
+ * The full-text vector.
+ *
+ * MUST stay byte-identical to idx_candidates_upgraded_expr_vector or the
+ * planner will not use the index and every keyword search becomes a sequential
+ * scan over 5.6M rows. The c++ substitution exists because tokenisation would
+ * otherwise destroy the term; the same replacement is baked into the index.
+ */
+const SEARCH_TSVECTOR = `to_tsvector('english',
+                  regexp_replace(
+                    coalesce(name, '') || ' ' ||
+                    coalesce(headline, '') || ' ' ||
+                    coalesce(latest_role, '') || ' ' ||
+                    coalesce(current_company, '') || ' ' ||
+                    coalesce(experience, '') || ' ' ||
+                    coalesce(summary, ''),
+                    'c\\+\\+', 'cpp_lang', 'ig'
+                  )
+                )`;
+
+/**
  * The candidate projection the UI and the screening engines expect.
  *
  * Shared by runIlikeSearch and getCandidatesByUrl so a campaign resolved by
@@ -508,52 +553,93 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     const values: any[] = [];
     let paramIndex = 1;
 
-    const tsqueryParts: string[] = [];
+    // ── Keyword matching ────────────────────────────────────────────────────
+    //
+    // Terms are matched two different ways, because one instrument cannot
+    // handle both scripts:
+    //
+    //   Latin terms      -> to_tsquery against the GIN expression index. Fast,
+    //                       and stemming means "engineer" also finds
+    //                       "engineering".
+    //   Japanese/Chinese/
+    //   Korean terms     -> ILIKE '%term%'. PostgreSQL's parser cannot segment
+    //                       scripts written without spaces: '営業部長' is a
+    //                       SINGLE lexeme, so to_tsquery('営業') can never
+    //                       match it. See core/tsquery.ts.
+    //
+    // Before this, CJK terms were reduced to the empty string by
+    // toTsQueryPhrase and then dropped by `.filter(Boolean)`, so the condition
+    // vanished from the WHERE clause entirely. Measured on the live table: a
+    // search for 営業 restricted to Tokyo returned 584,802 candidates against a
+    // true 24,127 — every candidate in the region, silently.
+    //
+    // ILIKE over the concatenated text cannot use an index, so a CJK term costs
+    // a scan (~3s alongside a location filter). That is the price of a correct
+    // answer here; a segmenting extension such as pg_bigm or PGroonga is what
+    // would make it both correct and fast.
+    const orGroups: string[] = [];
 
-    // MUST terms (AND)
-    if (params.must && params.must.length > 0) {
-      const mustQueries = Array.from(new Set(params.must.map(toTsQueryPhrase).filter(Boolean)));
-      if (mustQueries.length > 0) tsqueryParts.push(`(${mustQueries.join(' & ')})`);
-    }
+    /**
+     * Builds one OR-of-terms condition, mixing both matching strategies.
+     * Returns null when no term in the group is usable.
+     */
+    const buildOrGroup = (terms: readonly string[]): string | null => {
+      const lexemes: string[] = [];
+      const substrings: string[] = [];
 
-    // SHOULD terms (OR)
-    if (params.should && params.should.length > 0) {
-      const shouldQueries = Array.from(new Set(params.should.map(toTsQueryPhrase).filter(Boolean)));
-      if (shouldQueries.length > 0) tsqueryParts.push(`(${shouldQueries.join(' | ')})`);
-    }
-
-    // AND GROUPS
-    if (params.andGroups && params.andGroups.length > 0) {
-      for (const group of params.andGroups) {
-        if (group.length === 0) continue;
-        const groupQueries = Array.from(new Set(group.map(toTsQueryPhrase).filter(Boolean)));
-        if (groupQueries.length > 0) tsqueryParts.push(`(${groupQueries.join(' | ')})`);
+      for (const term of terms) {
+        const match = classifyTerm(term);
+        if (match.kind === 'lexeme') lexemes.push(match.value);
+        else if (match.kind === 'substring') substrings.push(match.value);
       }
+
+      const parts: string[] = [];
+
+      // Deduplicated: identical parsed phrases made the planner multiply its
+      // selectivity estimates and inflate the row count.
+      const uniqueLexemes = Array.from(new Set(lexemes));
+      if (uniqueLexemes.length > 0) {
+        parts.push(`${SEARCH_TSVECTOR} @@ to_tsquery('english', $${paramIndex})`);
+        values.push(uniqueLexemes.join(' | '));
+        paramIndex++;
+      }
+
+      for (const sub of Array.from(new Set(substrings))) {
+        parts.push(`${SEARCH_BLOB} ILIKE $${paramIndex}`);
+        values.push(`%${sub}%`);
+        paramIndex++;
+      }
+
+      return parts.length > 0 ? `(${parts.join(' OR ')})` : null;
+    };
+
+    // MUST terms — each is its own AND'd requirement.
+    for (const term of params.must ?? []) {
+      const group = buildOrGroup([term]);
+      if (group) orGroups.push(group);
     }
 
-    // MUST NOT terms (NOT)
+    // SHOULD terms — one OR group.
+    if (params.should && params.should.length > 0) {
+      const group = buildOrGroup(params.should);
+      if (group) orGroups.push(group);
+    }
+
+    // AND GROUPS — OR within a group, AND between groups.
+    for (const group of params.andGroups ?? []) {
+      if (group.length === 0) continue;
+      const built = buildOrGroup(group);
+      if (built) orGroups.push(built);
+    }
+
+    for (const group of orGroups) conditions.push(group);
+
+    // MUST NOT — negate the OR of every excluded term.
     if (params.mustNot && params.mustNot.length > 0) {
-      const notQueries = Array.from(new Set(params.mustNot.map(toTsQueryPhrase).filter(Boolean)));
-      if (notQueries.length > 0) tsqueryParts.push(`!(${notQueries.join(' | ')})`);
-    }
-
-    if (tsqueryParts.length > 0) {
-      const finalTsQueryStr = tsqueryParts.join(' & ');
-      conditions.push(`
-                to_tsvector('english', 
-                  regexp_replace(
-                    coalesce(name, '') || ' ' || 
-                    coalesce(headline, '') || ' ' || 
-                    coalesce(latest_role, '') || ' ' || 
-                    coalesce(current_company, '') || ' ' || 
-                    coalesce(experience, '') || ' ' || 
-                    coalesce(summary, ''),
-                    'c\\+\\+', 'cpp_lang', 'ig'
-                  )
-                ) @@ to_tsquery('english', $${paramIndex})
-            `);
-      values.push(finalTsQueryStr);
-      paramIndex++;
+      const built = buildOrGroup(params.mustNot);
+      // NOT over a nullable ILIKE would drop rows where the blob is NULL;
+      // coalesce inside SEARCH_BLOB keeps it non-null so NOT is total.
+      if (built) conditions.push(`NOT ${built}`);
     }
 
     // Location filter (ILIKE for region-level matching)
@@ -657,7 +743,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     // (which represents the "whole figures" for the UI) without running a full
     // sequence scan that could take >60s and time out the API.
     const explainQuery = `EXPLAIN SELECT 1 FROM candidates_upgraded ${whereClause}`;
-    const exactCountBoundedQuery = `SELECT count(*)::int AS n FROM (SELECT 1 FROM candidates_upgraded ${whereClause} LIMIT 10000) sub`;
+    const exactCountBoundedQuery = `SELECT count(*)::int AS n FROM (SELECT 1 FROM candidates_upgraded ${whereClause} LIMIT ${EXACT_COUNT_CEILING}) sub`;
 
     const finalQuery = `
             SELECT ${CANDIDATE_PROJECTION}
@@ -668,31 +754,46 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
 
     // skipCount drops the count entirely for callers that never read it.
     let counted = 0;
-    if (!params.skipCount) {
-      // First try to count up to 10000 accurately. This takes <300ms for broad queries.
-      const exactRes = await client.query(exactCountBoundedQuery, values);
-      const exactCount = exactRes.rows[0].n;
+    // True when `counted` is a floor rather than an exact figure.
+    let isApproximate = false;
 
-      if (exactCount < 10000) {
-        // Perfectly accurate count!
+    if (!params.skipCount) {
+      // First try to count up to the ceiling accurately. Fast for the selective
+      // queries that make up most searches, and exact when it succeeds.
+      const exactRes = await client.query(exactCountBoundedQuery, values);
+      const exactCount = exactRes.rows[0].n as number;
+
+      if (exactCount < EXACT_COUNT_CEILING) {
+        // Perfectly accurate count.
         counted = exactCount;
       } else {
-        // Over 10k, so use the statistical estimate to give the huge number instantly.
+        // Over the ceiling, so fall back to the planner estimate to give a
+        // large number instantly.
         const explainRes = await client.query(explainQuery, values);
-        const plan = explainRes.rows.map((r: any) => Object.values(r)[0]).join('\n');
-        const match = plan.match(/rows=(\d+)/);
+        const plan = explainRes.rows.map((r) => Object.values(r as object)[0]).join('\n');
+        const match = /rows=(\d+)/.exec(plan);
         const estimate = match ? parseInt(match[1], 10) : 0;
-        // The estimate might be smaller than 10000 due to planner inaccuracies, so we floor it to 10000
-        counted = Math.max(estimate, 10000);
+        counted = Math.max(estimate, EXACT_COUNT_CEILING);
+
+        // Whatever the estimate says, all we actually established is
+        // "at least EXACT_COUNT_CEILING". Reporting it as exact was wrong in
+        // both directions: planner estimates for `@@ to_tsquery` combined with
+        // ILIKE run up to ~80x over and ~45% under on this table, and a CJK
+        // search is worse still because there are no statistics at all for a
+        // leading-wildcard ILIKE — the estimate then lands below the ceiling
+        // and gets floored to exactly it. A search with 24,127 real matches
+        // displayed a confident "10,000".
+        //
+        // Flagging it lets the UI render "10,000+ or more records match",
+        // which it already knows how to do, instead of asserting a figure.
+        isApproximate = true;
       }
     }
 
     const res = await client.query(finalQuery, [...values, params.limit]);
 
-    // We no longer cap the total so the UI can display the whole figure.
-    // Setting totalIsCapped to false ensures the UI just prints the number.
     const total = counted;
-    const totalIsCapped = false;
+    const totalIsCapped = isApproximate;
 
     return { hits: res.rows, total, totalIsCapped, countCap: COUNT_CAP };
   } finally {
