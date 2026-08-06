@@ -8,6 +8,8 @@ import {
   nullProgressReporter,
 } from '../domain/ports';
 import { compileRubric } from '../screening/rubric';
+import { modelFor } from '../screening/llm';
+import { challengerSharesFamily } from '../core/model_catalog';
 import { screenCandidate, type CandidateOutcome } from '../screening/pipeline';
 import { hashJd, saveAuditBatch, type AuditRow } from '../repositories/screening_repo';
 import { saveScreeningResultsBatch } from '../repositories/postgres_repo';
@@ -67,6 +69,17 @@ export class AgenticScreeningAdapter implements ScreeningStrategy {
       return [];
     }
 
+    // Not fatal, but it quietly removes most of the challenger's value: a model
+    // sharing the adjudicator's lineage shares its blind spots, and two models
+    // failing the same way is indistinguishable from one being right.
+    if (challengerSharesFamily(modelFor('adjudicator'), modelFor('challenger'))) {
+      logWarn('challenger_shares_family_with_adjudicator', {
+        adjudicator: modelFor('adjudicator'),
+        challenger: modelFor('challenger'),
+        why: 'shared lineage means shared blind spots — pick a different family',
+      });
+    }
+
     logInfo('agentic_screening_started', {
       runId,
       jdHash,
@@ -119,6 +132,8 @@ export class AgenticScreeningAdapter implements ScreeningStrategy {
       (n, o) => n + o.usage.promptTokens + o.usage.completionTokens,
       0,
     );
+    // DeepInfra portion only — NIM is credit/licence based, not per-token.
+    const usd = outcomes.reduce((n, o) => n + o.usage.usd, 0);
 
     logInfo('agentic_screening_complete', {
       runId,
@@ -132,6 +147,8 @@ export class AgenticScreeningAdapter implements ScreeningStrategy {
       fabricatedQuotes: fabrications,
       llmCalls: outcomes.reduce((n, o) => n + o.usage.calls, 0),
       totalTokens: tokens,
+      estimatedUsd: Number(usd.toFixed(4)),
+      usdPerCandidate: outcomes.length > 0 ? Number((usd / outcomes.length).toFixed(5)) : 0,
     });
 
     return outcomes.map((o) => ({
