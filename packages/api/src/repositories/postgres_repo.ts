@@ -654,7 +654,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
     const COUNT_CAP = config.SEARCH_COUNT_CAP;
 
     // We use EXPLAIN to get a blazing-fast estimate of the total matching rows
-    // (which represents the "whole figures" for the UI) without running a full 
+    // (which represents the "whole figures" for the UI) without running a full
     // sequence scan that could take >60s and time out the API.
     const explainQuery = `EXPLAIN SELECT 1 FROM candidates_upgraded ${whereClause}`;
     const exactCountBoundedQuery = `SELECT count(*)::int AS n FROM (SELECT 1 FROM candidates_upgraded ${whereClause} LIMIT 10000) sub`;
@@ -672,7 +672,7 @@ export async function runIlikeSearch(params: IlikeSearchParams) {
       // First try to count up to 10000 accurately. This takes <300ms for broad queries.
       const exactRes = await client.query(exactCountBoundedQuery, values);
       const exactCount = exactRes.rows[0].n;
-      
+
       if (exactCount < 10000) {
         // Perfectly accurate count!
         counted = exactCount;

@@ -18,6 +18,7 @@ import { TreeScreeningAdapter } from './infrastructure/TreeScreeningAdapter';
 import { LlmScreeningAdapter } from './infrastructure/LlmScreeningAdapter';
 import { PipelineScreeningAdapter } from './infrastructure/PipelineScreeningAdapter';
 import { HybridScreeningAdapter } from './infrastructure/HybridScreeningAdapter';
+import { AgenticScreeningAdapter } from './infrastructure/AgenticScreeningAdapter';
 import { HttpRiskScorer } from './infrastructure/HttpRiskScorer';
 import { GoogleSheetsSink } from './infrastructure/GoogleSheetsSink';
 import { EmailNotifier } from './infrastructure/EmailNotifier';
@@ -41,6 +42,9 @@ const strategies: ReadonlyMap<string, ScreeningStrategy> = new Map<string, Scree
   // entirely and made Hybrid the most expensive engine rather than the
   // cheapest.
   ['tree_llm', new HybridScreeningAdapter(treeAdapter, llmAdapter)],
+  // Rubric-driven, evidence-grounded, adversarially-checked screening with an
+  // explicit UNCERTAIN outcome. See packages/api/src/screening/.
+  ['agentic', new AgenticScreeningAdapter(progress)],
 ]);
 
 export const outreachOrchestrator = new OutreachOrchestrator(

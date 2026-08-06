@@ -8,6 +8,7 @@ import {
   RawCandidateRow,
   RiskScorer,
   ScreenedCandidate,
+  ScreeningOptions,
   ScreeningStrategy,
   nullProgressReporter,
 } from '../domain/ports';
@@ -38,7 +39,9 @@ export interface OutreachCommand {
    */
   readonly useCompanyIntel?: boolean;
   readonly screening: {
-    readonly engine: 'llm' | 'tree' | 'tree_llm' | 'pipeline';
+    // Derived from the port rather than restated, so adding an engine cannot
+    // leave this copy of the union behind.
+    readonly engine: ScreeningOptions['engine'];
     readonly model: string;
     readonly adjacentRoles?: string;
     readonly topN?: number;
@@ -64,6 +67,11 @@ export class OutreachOrchestrator {
     const str = (v: unknown, fallback: string): string =>
       typeof v === 'string' && v.length > 0 ? v : fallback;
 
+    // Optional text: absent is meaningfully different from 'N/A' here, because
+    // a screening engine must be able to tell "no data" from a literal string.
+    const text = (v: unknown): string | undefined =>
+      typeof v === 'string' && v.trim().length > 0 ? v : undefined;
+
     return input.map((c) => ({
       profileUrl: str(c.profile_url ?? c.resume_drive_view_url, 'N/A'),
       name: str(c.name ?? c.full_name, 'Unknown'),
@@ -71,6 +79,11 @@ export class OutreachOrchestrator {
       location: str(c.location ?? c.ai_latest_location, 'N/A'),
       headline: str(c.headline ?? c.ai_latest_role, 'N/A'),
       email: str(c.email, 'No Email Found'),
+      // The evidence the engines actually reason over. Previously dropped.
+      experience: text(c.experience ?? c.resume_text_excerpt),
+      summary: text(c.summary ?? c.candidate_summary),
+      education: text(c.education),
+      skills: text(c.skills),
     }));
   }
 

@@ -167,7 +167,7 @@ export const OutreachRequest = z.object({
   bypassDeduplication: z.boolean().default(false),
   useCompanyIntel: z.boolean().default(true),
   usePipeline: z.boolean().default(false),
-  screeningEngine: z.enum(['llm', 'tree', 'tree_llm']).default('llm'),
+  screeningEngine: z.enum(['llm', 'tree', 'tree_llm', 'agentic']).default('llm'),
   topN: z.number().int().min(50).max(1000).default(700),
   topK: z.number().int().min(10).max(500).default(300),
   treeTopK: z.number().int().min(10).max(2000).default(1000),
