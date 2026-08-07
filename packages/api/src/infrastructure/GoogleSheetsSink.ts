@@ -22,8 +22,11 @@ export class GoogleSheetsSink implements CandidateSink {
       // of saving rows via other methods, we just wrap its interactions.
       // For the orchestrator port to be satisfied, we'll implement a basic integration.
 
-      // Convert Map back to Record for legacy support
-      const riskData: Record<string, any> = {};
+      // Typed, not `any`. The previous `Record<string, any>` here is what let
+      // the sheets writer read snake_case fields off a camelCase RiskScore
+      // without the compiler objecting; every backfill then threw on
+      // `risk.hazard.toFixed(2)` and was swallowed by the catch below.
+      const riskData: Record<string, RiskScore> = {};
       for (const [url, score] of batch.scores.entries()) {
         riskData[url] = score;
       }

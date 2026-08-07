@@ -2,10 +2,13 @@ import { z } from 'zod';
 import { RiskScore, RiskScorer } from '../domain/ports';
 
 const ScoringCandidateResult = z.object({
-  hazard: z.number(),
-  relevancy: z.number(),
-  move_prob: z.number(),
-  tenure: z.number(),
+  // Nullable by design: 'none' means the candidate is not in the panel, and
+  // the service returns null rather than the old service's fabricated 0.05.
+  move_prob: z.number().nullable(),
+  horizon_months: z.number(),
+  basis: z.enum(['model', 'baseline', 'none']),
+  tenure_months: z.number().nullable(),
+  market: z.string().nullable(),
 });
 
 const ScoringResponse = z.object({
@@ -14,10 +17,11 @@ const ScoringResponse = z.object({
 
 function toRiskScore(val: z.infer<typeof ScoringCandidateResult>): RiskScore {
   return {
-    hazard: val.hazard,
-    relevancy: val.relevancy,
     moveProb: val.move_prob,
-    tenureMonths: val.tenure,
+    horizonMonths: val.horizon_months,
+    basis: val.basis,
+    tenureMonths: val.tenure_months,
+    market: val.market,
   };
 }
 
