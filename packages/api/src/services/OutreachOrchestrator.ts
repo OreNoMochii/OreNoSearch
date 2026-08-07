@@ -143,9 +143,18 @@ export class OutreachOrchestrator {
       return;
     }
 
+    const resolved = rows.length;
     let candidates = this.excludeSameCompany(this.normaliseCandidates(rows), cmd.companyName);
+    const afterSameCompany = candidates.length;
 
-    if (candidates.length === 0 && cmd.screening.engine === 'llm') return;
+    if (candidates.length === 0 && cmd.screening.engine === 'llm') {
+      logInfo('campaign_no_candidates', {
+        batchId: cmd.batchId,
+        resolved,
+        removedSameCompany: resolved - afterSameCompany,
+      });
+      return;
+    }
 
     // Dedup Check
     const urls = candidates.map((c) => c.profileUrl);
@@ -155,6 +164,23 @@ export class OutreachOrchestrator {
         : new Set<string>();
 
     candidates = candidates.filter((c) => !alreadySent.has(c.profileUrl));
+
+    // Everything that happens before a single model call, in one line. When a
+    // campaign screens far fewer people than expected the cause is almost
+    // always one of these three filters rather than the engine, and until now
+    // only the same-company step logged anything.
+    logInfo('campaign_started', {
+      batchId: cmd.batchId,
+      engine: cmd.screening.engine,
+      model: cmd.screening.model,
+      resolved,
+      removedSameCompany: resolved - afterSameCompany,
+      removedAlreadyContacted: alreadySent.size,
+      toScreen: candidates.length,
+      recipients: emailsList.length,
+      dedupBypassed: cmd.bypassDeduplication === true,
+      companyIntel: cmd.useCompanyIntel ?? true,
+    });
 
     // Published after filtering, so the progress denominator is what will
     // actually be screened. The enqueuing client cannot know this figure when
@@ -172,6 +198,19 @@ export class OutreachOrchestrator {
     });
 
     const passed = results.filter((r) => r.verdict === 'PASS');
+    logInfo('campaign_screening_finished', {
+      batchId: cmd.batchId,
+      engine: cmd.screening.engine,
+      submitted: candidates.length,
+      returned: results.length,
+      passed: passed.length,
+      rejected: results.length - passed.length,
+      // Candidates handed to the engine that came back with no verdict at
+      // all. Should be zero; a non-zero value means the shortlist silently
+      // shrank rather than someone being screened out on the merits.
+      noVerdict: candidates.length - results.length,
+    });
+
     if (passed.length === 0) {
       logInfo('campaign_complete', { batchId: cmd.batchId, passed: 0 });
       return;
@@ -190,12 +229,34 @@ export class OutreachOrchestrator {
     // /score route at all.
     const passedUrls = passed.map((p) => p.profileUrl);
     let riskData: ReadonlyMap<string, RiskScore> = new Map();
+    const scoreStarted = Date.now();
     try {
       riskData = await this.riskScorer.score(passedUrls, cmd.jdText);
+
+      // Coverage, not just success. The scorer answers for every candidate
+      // asked about, but a "none" basis carries a null probability and a
+      // "baseline" one comes from a tenure lookup rather than the model — a
+      // run that is 90% baseline is technically working and analytically
+      // worthless, and the old success-is-silent logging could not show that.
+      const byBasis: Record<string, number> = {};
+      let scored = 0;
+      for (const s of riskData.values()) {
+        byBasis[s.basis] = (byBasis[s.basis] ?? 0) + 1;
+        if (s.moveProb !== null) scored++;
+      }
+      logInfo('risk_scoring_complete', {
+        batchId: cmd.batchId,
+        requested: passedUrls.length,
+        returned: riskData.size,
+        withProbability: scored,
+        basis: byBasis,
+        elapsedMs: Date.now() - scoreStarted,
+      });
     } catch (err) {
       logWarn('risk_scoring_unavailable', {
         batchId: cmd.batchId,
         candidates: passedUrls.length,
+        elapsedMs: Date.now() - scoreStarted,
         error: err instanceof Error ? err.message : String(err),
       });
     }

@@ -436,6 +436,29 @@ CRITICAL: If data for a requirement is missing, set evidence_quote to "No eviden
           `Verdict: ${result.final_verdict}. Score: ${result.overall_fit_score}. ` +
           `Seniority: ${seniority}${techFeedback}`;
 
+        // The structured view of the same verdict. The reasoning string above
+        // is built for a human reading a spreadsheet cell; these fields are
+        // for asking questions across a whole batch — which competency scores
+        // lowest on average, whether a model's fit scores cluster at one
+        // value, how often adversarial flags fire. None of that is
+        // extractable from prose.
+        logInfo('llm_candidate_verdict', {
+          name,
+          model: cleanModel,
+          verdict: isMatch ? 'PASS' : 'REJECT',
+          fitScore: result.overall_fit_score,
+          seniority,
+          verifiedQuotes: grounding.verified,
+          unverifiedQuotes: grounding.unverified,
+          competencies: result.technical_audit.map(
+            (a) => `${a.requirement ?? '?'}=${a.competency_score ?? '?'}`,
+          ),
+          riskFlagged:
+            !!result.adversarial_flags.risk_details &&
+            result.adversarial_flags.risk_details !== 'None',
+          attempt,
+        });
+
         return { isMatch, reasoning, auditJson: JSON.stringify(result, null, 2) };
       } catch (error: unknown) {
         const err = error as { status?: number; message?: string };

@@ -63,15 +63,24 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
     const companyIntel = await this.loadCompanyIntel(candidates, opts);
 
     const total = candidates.length;
+    const startedAt = Date.now();
     logInfo('llm_audit_started', {
       total,
       model: opts.model,
       concurrency: currentConcurrency,
+      companyIntelMatched: companyIntel.size,
+      adjacentRoles: opts.adjacentRoles ? opts.adjacentRoles : undefined,
     });
 
     let processed = 0;
     let consecutiveSuccesses = 0;
     let rateLimitHits = 0;
+    // Verdicts the grounding check in ScreeningAgent flipped from PASS to
+    // REJECT because the model's supporting quotes were not in the profile.
+    // Per-candidate these already warn; without a running total there is no
+    // way to see that a model is fabricating on most of the batch.
+    let overturnedByGrounding = 0;
+    let errored = 0;
 
     const finalResults: ScreeningResult[] = [];
 
@@ -116,6 +125,7 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
               },
             };
           } catch (err) {
+            errored++;
             logError('candidate_screening_failed', err as Error, { name: candidate.name });
             return { status: 'error' as const, candidate };
           } finally {
@@ -133,6 +143,13 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
         if (r.status === 'fulfilled' && r.value.status === 'success') {
           finalResults.push(r.value.result);
           waveVerdicts.push(r.value.result);
+          // ScreeningAgent overturns a PASS when the model's cited quotes are
+          // absent from the profile, and signals it in the reasoning prefix.
+          // Matching on that string is brittle, but the alternative is
+          // widening the ScreeningResult contract for a counter.
+          if (r.value.result.reasoning.startsWith('Verdict overturned:')) {
+            overturnedByGrounding++;
+          }
         }
       }
 
@@ -169,13 +186,46 @@ export class LlmScreeningAdapter implements ScreeningStrategy {
       }
 
       processed += waveSize;
+
+      // A large batch is otherwise silent between start and finish. The rate
+      // is measured over the whole run rather than the last wave so the ETA
+      // does not swing wildly every time concurrency is halved by a 429.
+      const elapsedMs = Date.now() - startedAt;
+      const perCandidate = elapsedMs / Math.max(processed, 1);
+      logInfo('llm_audit_progress', {
+        processed,
+        total,
+        pct: Math.round((processed / total) * 100),
+        passedSoFar: finalResults.filter((r) => r.verdict === 'PASS').length,
+        overturnedByGrounding,
+        concurrency: currentConcurrency,
+        etaSeconds: Math.round((perCandidate * (total - processed)) / 1000),
+      });
     }
+
+    const passedCount = finalResults.filter((r) => r.verdict === 'PASS').length;
+    const elapsedMs = Date.now() - startedAt;
 
     logInfo('llm_audit_complete', {
       total,
-      passed: finalResults.filter((r) => r.verdict === 'PASS').length,
+      screened: finalResults.length,
+      passed: passedCount,
+      rejected: finalResults.length - passedCount,
+      passRate: finalResults.length ? Number((passedCount / finalResults.length).toFixed(3)) : 0,
+      // Fabricated-evidence overturns. If this approaches the rejection count
+      // the model is not screening, it is hallucinating and being caught —
+      // a signal to change model rather than to tune the prompt.
+      overturnedByGrounding,
+      // Candidates that produced no verdict at all: neither passed nor
+      // rejected, just lost. Silent shrinkage of a shortlist is worse than a
+      // visible failure.
+      errored,
+      unaccounted: total - finalResults.length,
       rateLimitHits,
       finalConcurrency: currentConcurrency,
+      elapsedSeconds: Math.round(elapsedMs / 1000),
+      msPerCandidate: Math.round(elapsedMs / Math.max(total, 1)),
+      model: opts.model,
     });
 
     return finalResults;
