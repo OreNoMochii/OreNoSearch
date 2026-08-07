@@ -1,8 +1,30 @@
+"""
+QUARANTINED — this file trains on data it invents.
+
+`generate_flight_risk_data` below is np.random.uniform. Every feature, the
+risk score, the tenure and the event indicator are drawn from distributions
+written by hand, then a Cox model is fitted to them and a "Model Performance"
+table with a Concordance Index is printed. The c-index measures how well the
+model recovered the arithmetic in `risk_score`; it says nothing about any
+candidate. The event indicator is np.random.binomial(1, 0.4) — independent of
+every feature — so even that number is mostly noise.
+
+Nothing imports this module. It is kept because it is the file named after
+the task, and someone will find it and run it. It must not be mistaken for a
+trained model or a source of metrics.
+
+The real work is the point-in-time panel built from observed transitions:
+  - machine_learning/src/extract_career_dates.py  (recovers calendar dates)
+  - machine_learning/src/build_snapshots.py       (observed moves)
+  - docs/flight_risk.md                           (the plan)
+"""
+
 import pandas as pd
 import numpy as np
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index
 from sklearn.model_selection import train_test_split
+
 
 def generate_flight_risk_data(n_samples=5000):
     """
