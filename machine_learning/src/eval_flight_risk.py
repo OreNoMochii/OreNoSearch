@@ -110,8 +110,14 @@ SELECT
     EXTRACT(MONTH FROM (s.spell_start + (g.t || ' months')::interval))::int
                                                           AS obs_month,
     CASE WHEN s.duration_months - g.t > {HORIZON_MONTHS} THEN 0 ELSE 1 END AS y,
+    -- Employer's position on the 外資系 / domestic axis. NULL for ~2/3 of
+    -- companies (below the evidence gate in company_foreign_affinity);
+    -- LightGBM takes NaN natively, so no imputation is invented here.
+    cfa.foreign_affinity,
     {", ".join("s." + f for f in FEATURES)}
 FROM sampled s
+LEFT JOIN company_norm_map cnm         ON cnm.company = s.company
+LEFT JOIN company_foreign_affinity cfa ON cfa.norm    = cnm.norm
 CROSS JOIN LATERAL generate_series(
     0,
     LEAST(s.duration_months, {MAX_ELAPSED_MONTHS})::int - 1,
@@ -254,13 +260,13 @@ def fit_lgbm(tr: pd.DataFrame, te: pd.DataFrame, cols: list[str]) -> np.ndarray 
 
 def report(rows: list[dict], title: str) -> None:
     print(f"\n{title}")
-    hdr = f"  {'model':<26}{'AUC':>8}{'Brier':>9}{'p@5%':>9}{'lift':>7}{'p@10%':>9}{'lift':>7}"
+    hdr = f"  {'model':<44}{'AUC':>8}{'Brier':>9}{'p@5%':>9}{'lift':>7}{'p@10%':>9}{'lift':>7}"
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
     for r in rows:
         brier = f"{r['brier']:.4f}" if not np.isnan(r["brier"]) else "     — "
         print(
-            f"  {r['model']:<26}{r['auc']:>8.4f}{brier:>9}"
+            f"  {r['model']:<44}{r['auc']:>8.4f}{brier:>9}"
             f"{r['p@5%']:>9.4f}{r['lift@5%']:>7.2f}"
             f"{r['p@10%']:>9.4f}{r['lift@10%']:>7.2f}"
         )
@@ -276,7 +282,19 @@ def run_split(df: pd.DataFrame, tr_mask: np.ndarray, title: str, by_market: bool
     print(f"\n{title}")
     print(f"  train {len(tr):,} | test {len(te):,} | test base rate {base:.4f}")
 
-    cols = FEATURES + ["elapsed_months", "obs_month"]
+    # `foreign_affinity` is added here rather than to build_flight_risk_panel's
+    # FEATURES because it is not a column of the spell panel — it is joined in
+    # per employer, and the panel's leakage gate can only audit its own table.
+    #
+    # It carries a leakage caveat the gate would not catch either. The
+    # co-employment graph behind it is built over the WHOLE corpus, test period
+    # included, so on the calendar split it is mildly transductive: a company's
+    # score is informed by moves that happen after the training cutoff. The
+    # quantity is a stable structural attribute of an employer rather than
+    # anything derived from an individual's outcome, so the channel is weak —
+    # but it is not zero, and any gain here should be read as an upper bound
+    # until the graph is rebuilt on pre-cutoff data only.
+    cols = FEATURES + ["elapsed_months", "obs_month", "foreign_affinity"]
     bases = baseline_scores(tr, te)
     rows = []
     for nm, sc in bases.items():
@@ -284,12 +302,27 @@ def run_split(df: pd.DataFrame, tr_mask: np.ndarray, title: str, by_market: bool
             evaluate(nm, te["y"].to_numpy(), sc, base, proba=nm.startswith("B3"))
         )
 
+    # Looked up by name, not by position. `rows[-1]` happened to be B3 only
+    # because baseline_scores() inserts it last, which is a property of a dict
+    # literal and not something the comparison should depend on.
+    b3_auc = next(r["auc"] for r in rows if r["model"].startswith("B3"))
+
+    # Ablation. The point of running both is that "we built it, so use it" is
+    # how a feature that does nothing ends up in production. The résumé-only
+    # fit is the incumbent; foreign_affinity has to beat it on its own numbers.
+    base_cols = [c for c in cols if c != "foreign_affinity"]
+    pred_base = fit_lgbm(tr, te, base_cols)
+    if pred_base is not None:
+        r = evaluate("LightGBM (no affinity)", te["y"].to_numpy(), pred_base, base, proba=True)
+        r["model"] = f"LightGBM (no affinity) ({r['auc'] - b3_auc:+.4f} vs B3)"
+        rows.append(r)
+
     pred = fit_lgbm(tr, te, cols)
     if pred is not None:
-        rows.append(evaluate("LightGBM hazard", te["y"].to_numpy(), pred, base, proba=True))
-        b3_auc = rows[-2]["auc"]
-        gain = rows[-1]["auc"] - b3_auc
-        rows[-1]["model"] = f"LightGBM hazard ({gain:+.4f} vs B3)"
+        r = evaluate("LightGBM + affinity", te["y"].to_numpy(), pred, base, proba=True)
+        delta = r["auc"] - (rows[-1]["auc"] if pred_base is not None else b3_auc)
+        r["model"] = f"LightGBM + affinity ({delta:+.4f} vs no-affinity)"
+        rows.append(r)
 
     report(rows, f"  results — {title}")
 
@@ -311,6 +344,38 @@ def run_split(df: pd.DataFrame, tr_mask: np.ndarray, title: str, by_market: bool
             print(
                 f"    {mkt:<11}{m.sum():>10,}{ym.mean():>8.4f}"
                 f"{a_b2:>9.4f}{a_lgb:>9.4f}{a_lgb - a_b2:>+8.4f}"
+            )
+
+        # Employer type, the hypothesis from the audit: that the 外資系 /
+        # domestic split matters more than the country term. Asserted there on
+        # descriptive statistics alone and never tested. This is the test.
+        #
+        # Read the `base` column first, not the AUCs. If the 12-month leave
+        # rate genuinely differs across affinity bands, the feature is carrying
+        # real segmentation regardless of what it does to a global AUC — and
+        # if the bands have near-identical base rates, no amount of AUC
+        # movement makes the hypothesis true.
+        aff = te["foreign_affinity"].to_numpy(dtype=float)
+        bands = [
+            ("domestic  <0.25", aff < 0.25),
+            ("mid  0.25-0.60", (aff >= 0.25) & (aff < 0.60)),
+            ("foreign  >=0.60", aff >= 0.60),
+            ("unscored  NULL", np.isnan(aff)),
+        ]
+        print("\n  by employer type (foreign_affinity band)")
+        hdr2 = f"    {'band':<17}{'n':>10}{'base':>8}{'B3 AUC':>9}{'LGB AUC':>9}{'Δ':>8}"
+        print(hdr2)
+        print("    " + "-" * (len(hdr2) - 4))
+        for label, m in bands:
+            ym = te["y"].to_numpy()[m]
+            if len(ym) == 0 or len(np.unique(ym)) < 2 or ym.sum() < 50:
+                print(f"    {label:<17}{m.sum():>10,}{'too few':>26}")
+                continue
+            print(
+                f"    {label:<17}{m.sum():>10,}{ym.mean():>8.4f}"
+                f"{roc_auc_score(ym, b2_all[m]):>9.4f}"
+                f"{roc_auc_score(ym, pred[m]):>9.4f}"
+                f"{roc_auc_score(ym, pred[m]) - roc_auc_score(ym, b2_all[m]):>+8.4f}"
             )
 
 

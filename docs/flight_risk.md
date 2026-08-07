@@ -328,3 +328,68 @@ work", compensation against market band, manager change, employer layoffs or
 funding events. The snapshot pipeline in Phase 1 delivers the first of those
 for free once a second capture exists, and it is a bigger lift than anything
 in Phase 3.
+
+---
+
+## 7. Tested: does employer type (外資系) help?
+
+Two claims got tested here. One held, one did not.
+
+### 7.1 The feature does not earn its place in the model
+
+`company_foreign_affinity` validated at 0.925 on its *own* task. As a
+flight-risk feature it is worth nothing. Ablation, calendar split, 60k spells
+expanded to 695,640 person-periods:
+
+| | AUC | p@5% | lift |
+| --- | --- | --- | --- |
+| B3 empirical hazard(t) | 0.6429 | 0.3000 | 1.45 |
+| LightGBM (no affinity) | 0.6691 | 0.4470 | 2.16 |
+| LightGBM **+ affinity** | 0.6695 | 0.4570 | 2.21 |
+
+**+0.0004 AUC.** Noise. The profile split agrees at +0.0016.
+
+One point against that verdict, kept rather than buried: p@5% moved
+0.4470 → 0.4570, +2.2% relative, at exactly the end of the ranking a recruiter
+uses. From a single split it is not enough to act on, but it is not nothing
+either. Worth a repeat before the feature is written off completely.
+
+### 7.2 Why it adds nothing, even though the signal is real
+
+Employer type genuinely separates tenure in Japan:
+
+| band | spells | median completed tenure |
+| --- | --- | --- |
+| domestic `<0.25` | 147,634 | **41.0 mo** |
+| mid `0.25-0.60` | 200,455 | 34.0 |
+| foreign `>=0.60` | 487,499 | **33.0** |
+| unscored | 1,535,146 | 24.0 |
+
+A 24% gap in the predicted direction — gaishikei employees turn over faster.
+So the construct is sound and the measurement works.
+
+It adds nothing to the model because it is **redundant**. The panel already
+carries `prior_avg_tenure`, `prior_median_tenure`, `prior_last_tenure` and
+`prior_short_stints`. Someone's own track record already encodes most of what
+their employer's type would tell you, and it encodes it at the individual
+level rather than the employer average.
+
+### 7.3 A claim from the audit, falsified
+
+Section 4 asserted: *"the variance inside Japan is probably larger than the gap
+between countries"*, and recommended testing employer-type segmentation before
+building anything Japan-specific. Tested:
+
+- **within** Japan, by employer type: 33 → 41 months (24% spread)
+- **between** markets: Japan 27 vs Other 14 months (93% spread)
+
+The country term is the larger effect, not the smaller one. The recommendation
+to segment by employer type stands as a reasonable thing to have checked; the
+prediction attached to it was wrong.
+
+### 7.4 Consequence
+
+Do not add `foreign_affinity` to the served model on this evidence. The table
+stays — it is cheap to maintain, it is correct at what it measures, and it is
+useful for describing a shortlist to a recruiter ("this candidate has only
+ever worked at 外資系"). It is a reporting attribute, not a predictor.
