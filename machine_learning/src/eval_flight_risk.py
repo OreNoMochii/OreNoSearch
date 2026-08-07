@@ -99,7 +99,21 @@ WITH sampled AS (
     WHERE duration_months >= 3
       AND prior_n_employers >= 1        -- needs some history to have features
       AND spell_start >= DATE '1995-01-01'
-    ORDER BY md5(profile_url)           -- deterministic pseudo-random sample
+      -- Deterministic pseudo-random sample by hash bucket.
+      --
+      -- This was `ORDER BY md5(profile_url) LIMIT n`, which is correct but
+      -- sorts all 19.5M qualifying spells before discarding almost all of
+      -- them. On NVMe that was tolerable; once the database moved to an
+      -- external HDD it became the dominant cost of every run — a top-N sort
+      -- spilling to disk.
+      --
+      -- A hash-bucket filter keeps the properties that mattered (stable
+      -- across runs, uncorrelated with anything in the data, a whole profile
+      -- kept together) and needs no sort. 28 bits rather than 32 so the value
+      -- is always positive — bit(32)::int is signed, and a negative modulus
+      -- in Postgres yields a negative remainder.
+      AND ('x' || substr(md5(profile_url), 1, 7))::bit(28)::int
+          %% %(bucket_mod)s = 0
     LIMIT %(sample)s
 )
 SELECT
@@ -132,11 +146,34 @@ WHERE
 """
 
 
+def panel_params(conn, sample: int) -> dict:
+    """
+    Sample size plus the hash modulus that yields roughly that many spells.
+
+    Read from reltuples rather than count(*) — a planner estimate is accurate
+    enough to size a sample and does not cost a full scan of 19.5M rows on a
+    spinning disk.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT GREATEST(reltuples::bigint, 1) FROM pg_class "
+            "WHERE relname = 'flight_risk_spells'"
+        )
+        row = cur.fetchone()
+    total = int(row[0]) if row else sample
+    # LIMIT still caps the result, so overshooting slightly is harmless;
+    # undershooting would silently shrink the sample, so bias low.
+    mod = max(1, int(total / max(sample, 1)))
+    return {"sample": sample, "bucket_mod": mod}
+
+
 def load(sample: int) -> pd.DataFrame:
     conn = psycopg2.connect(**db_config())
     try:
-        print(f"expanding {sample:,} spells into quarterly person-periods…")
-        df = pd.read_sql(PANEL_SQL, conn, params={"sample": sample})
+        params = panel_params(conn, sample)
+        print(f"expanding ~{sample:,} spells (1 in {params['bucket_mod']}) "
+              "into quarterly person-periods…")
+        df = pd.read_sql(PANEL_SQL, conn, params=params)
     finally:
         conn.close()
 

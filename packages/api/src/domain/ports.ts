@@ -37,17 +37,50 @@ export interface ScreenedCandidate {
   readonly skills?: string;
 }
 
+/**
+ * How a score was produced. Read this before the number.
+ *
+ * A recruiter looking at 0.31 cannot tell whether it came from a fitted model
+ * or a tenure lookup table, and the difference is large. Roughly a third of
+ * candidates have no usable employment history and get 'baseline'; anyone
+ * absent from the panel gets 'none' and a null probability.
+ */
+export type RiskBasis = 'model' | 'baseline' | 'none';
+
 export interface RiskScore {
-  /** Cox proportional-hazards score. Higher means likelier to move. */
-  readonly hazard: number;
-  /** Learning-to-rank relevance against the job description. */
-  readonly relevancy: number;
-  /** Probability of changing employer within the horizon, 0–1. */
-  readonly moveProb: number;
-  /** Tenure in the current role, months. */
-  readonly tenureMonths: number;
-  readonly medianTenure?: number;
+  /**
+   * Calibrated probability of leaving the current employer within
+   * `horizonMonths`. Null when `basis` is 'none' — the candidate is not in the
+   * panel and there is nothing to predict from.
+   *
+   * The previous contract answered 0.05 in that case: a prediction-shaped
+   * value containing no prediction.
+   */
+  readonly moveProb: number | null;
+  /** Window the probability refers to. 12 at time of writing. */
+  readonly horizonMonths: number;
+  readonly basis: RiskBasis;
+  /** Real elapsed tenure in the current role. Null when unknown. */
+  readonly tenureMonths: number | null;
+  /** Labour market used to select the calibration curve. */
+  readonly market: string | null;
 }
+
+/*
+ * Removed from this interface, deliberately:
+ *
+ *   hazard     documented as a "Cox proportional-hazards score"; was actually
+ *              `100 if pred else 10` — two possible values from an XGBoost
+ *              classifier, and that classifier was scoring rows it had
+ *              trained on.
+ *   relevancy  documented as LTR relevance against the job description. The
+ *              service accepted jd_text and ignored it, returning
+ *              (1 - semantic_drift) * 5. JD relevance belongs to the
+ *              retrieval pipeline, not to a tenure hazard model.
+ *   tenureMonths (old)  was the literal constant 24.
+ *
+ * See docs/flight_risk.md.
+ */
 
 /**
  * A candidate row as it arrives from a source, before normalisation.

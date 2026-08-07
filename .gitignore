@@ -94,3 +94,10 @@ Thumbs.db
 /query_test_explain2.ts
 /test_casing.ts
 /test_tsquery.js
+
+# Trained flight-risk artifact. Regenerate with
+#   python -m machine_learning.src.train_flight_risk_model --train
+# Binary, ~140KB, and tied to a specific panel build — meta.json records the
+# git SHA and row counts so a given artifact can be traced, but the artifact
+# itself is a build output, not source.
+/machine_learning/artifacts/flight_risk/

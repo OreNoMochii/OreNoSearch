@@ -1,8 +1,33 @@
 import { google, sheets_v4, drive_v3 } from 'googleapis';
 import { logDebug } from '../utils/logger';
 import { config } from '../config';
+import { RiskScore } from '../domain/ports';
 import path from 'path';
 import fs from 'fs';
+
+/**
+ * The three risk cells, columns D-F, rendered from one place.
+ *
+ * Both call sites previously read `risk.move_prob`, `risk.hazard` and
+ * `risk.tenure` from values that are actually `RiskScore` — camelCase, and
+ * with no `hazard` at all. GoogleSheetsSink casts to `Record<string, any>` on
+ * the way in, so the compiler never saw it: every backfill threw
+ * `Cannot read properties of undefined (reading 'toFixed')` into the
+ * surrounding catch and logged `gsheets_publish_failed`.
+ *
+ * Column E used to be `hazard`, which only ever held 100 or 10. It now holds
+ * the basis, so a recruiter can tell a modelled score from a tenure-table
+ * fallback — which is the thing that actually changes how much weight the
+ * number deserves.
+ */
+function riskCells(risk: RiskScore | undefined): [string, string, string] {
+  if (!risk) return ['N/A', 'N/A', 'N/A'];
+  return [
+    risk.moveProb === null ? 'N/A' : (risk.moveProb * 100).toFixed(2),
+    risk.basis,
+    risk.tenureMonths === null ? 'N/A' : risk.tenureMonths.toFixed(1),
+  ];
+}
 
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
@@ -309,10 +334,7 @@ export class GoogleSheetsService {
       current_company?: string;
       location?: string;
     }>,
-    riskData: Record<
-      string,
-      { hazard: number; move_prob: number; tenure: number; median_tenure?: number }
-    >,
+    riskData: Record<string, RiskScore>,
     sharedWith: string,
   ): Promise<number> {
     this.ensureClients();
@@ -330,9 +352,7 @@ export class GoogleSheetsService {
         c.name || 'Unknown',
         c.headline || '',
         c.current_company || '',
-        risk ? (risk.move_prob * 100).toFixed(2) : 'N/A',
-        risk ? risk.hazard.toFixed(2) : 'N/A',
-        risk ? risk.tenure.toFixed(1) : 'N/A',
+        ...riskCells(risk),
         url,
         c.location || '',
         '', // Contacted By — left empty for manual input
@@ -440,7 +460,7 @@ export class GoogleSheetsService {
    */
   async backfillRiskScores(
     spreadsheetId: string,
-    riskData: Record<string, { hazard: number; move_prob: number; tenure: number }>,
+    riskData: Record<string, RiskScore>,
   ): Promise<void> {
     this.ensureClients();
 
@@ -470,11 +490,7 @@ export class GoogleSheetsService {
         const risk = riskData[url];
         if (risk && (rows[i][3] === 'N/A' || !rows[i][3])) {
           // Column D = Move Prob
-          touched.set(i, [
-            (risk.move_prob * 100).toFixed(2),
-            risk.hazard.toFixed(2),
-            risk.tenure.toFixed(1),
-          ]);
+          touched.set(i, riskCells(risk));
         }
       }
 
