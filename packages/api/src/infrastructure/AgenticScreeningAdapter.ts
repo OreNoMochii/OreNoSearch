@@ -135,6 +135,39 @@ export class AgenticScreeningAdapter implements ScreeningStrategy {
     // DeepInfra portion only — NIM is credit/licence based, not per-token.
     const usd = outcomes.reduce((n, o) => n + o.usage.usd, 0);
 
+    // ── Funnel: where candidates actually stop ─────────────────────────────
+    // The single most useful view of this engine. "20 of 200 passed" says
+    // nothing about whether the rubric is too strict, the profiles too thin,
+    // or a model stage quietly failing — the stage histogram distinguishes
+    // all three, and they need completely different fixes.
+    const byStage: Record<string, number> = {};
+    for (const o of outcomes) {
+      const key = `${o.stage}:${o.decision}`;
+      byStage[key] = (byStage[key] ?? 0) + 1;
+    }
+
+    // Which knockouts are doing the rejecting. A single knockout accounting
+    // for most of a batch usually means a mis-compiled rubric rather than a
+    // uniformly unqualified list.
+    const knockouts: Record<string, number> = {};
+    for (const o of outcomes) {
+      for (const f of o.gates.failures) {
+        knockouts[f.knockoutId] = (knockouts[f.knockoutId] ?? 0) + 1;
+      }
+    }
+    const topKnockouts = Object.entries(knockouts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, n]) => `${id}=${n}`);
+
+    // Cost is concentrated in candidates that survive the gates, so the
+    // gate-survival rate is the main lever on spend for this engine.
+    const reachedLlm = outcomes.filter((o) => o.usage.calls > 0).length;
+
+    const durations = outcomes.map((o) => o.durationMs).sort((a, b) => a - b);
+    const pct = (p: number): number =>
+      durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * p))] : 0;
+
     logInfo('agentic_screening_complete', {
       runId,
       batchId: opts.batchId,
@@ -142,13 +175,25 @@ export class AgenticScreeningAdapter implements ScreeningStrategy {
       passed: passed.length,
       uncertain: uncertain.length,
       rejected: outcomes.length - passed.length - uncertain.length,
+      passRate: outcomes.length ? Number((passed.length / outcomes.length).toFixed(3)) : 0,
+      // Where each candidate stopped, as "stage:decision" counts.
+      funnel: byStage,
+      gatesRejected: outcomes.length - reachedLlm,
+      reachedLlmStages: reachedLlm,
+      topKnockouts,
       // A rising fabrication count is the leading indicator that a model or a
       // prompt change has started inventing evidence.
       fabricatedQuotes: fabrications,
+      candidatesWithFabrication: outcomes.filter((o) => o.fabricatedQuotes > 0).length,
+      verifiedQuotes: outcomes.reduce((n, o) => n + o.verifiedQuotes, 0),
       llmCalls: outcomes.reduce((n, o) => n + o.usage.calls, 0),
       totalTokens: tokens,
       estimatedUsd: Number(usd.toFixed(4)),
       usdPerCandidate: outcomes.length > 0 ? Number((usd / outcomes.length).toFixed(5)) : 0,
+      // Per-candidate wall time. p95 is what a stalled provider shows up in
+      // first; the mean hides it behind the gate-rejected majority.
+      latencyMsP50: pct(0.5),
+      latencyMsP95: pct(0.95),
     });
 
     return outcomes.map((o) => ({
