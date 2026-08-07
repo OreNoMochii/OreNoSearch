@@ -276,18 +276,55 @@ everything.
 
 ---
 
-## 6. Expected performance
+## 6. Measured performance
 
-An honest 12-month-horizon AUC on résumé-only features lands around
-**0.62–0.70**. The 0.98 is not a target to recover. Anyone reporting >0.85 on
-this problem from résumé features has a leak.
+Full panel: **19,466,429 spells across 4,769,208 profiles**, 150k sampled and
+expanded to 1,739,036 quarterly person-periods. Calendar split (train on
+observation points before 2016, test after) — the split to read.
 
-The realistic win is precision@k — roughly doubling the base rate in the top 50,
-which is what actually changes a recruiter's day.
+| | AUC | Brier | p@5% | lift | p@10% | lift |
+| --- | --- | --- | --- | --- | --- | --- |
+| B1 −tenure | 0.6523 | — | 0.3088 | 1.49 | 0.3124 | 1.51 |
+| B2 −tenure/personal avg | 0.5716 | — | 0.3063 | 1.48 | 0.2837 | 1.37 |
+| B3 empirical hazard(t) | 0.6438 | 0.1582 | 0.2978 | 1.44 | 0.2973 | 1.44 |
+| **LightGBM** | **0.6776** | 0.1569 | **0.4535** | **2.19** | **0.4124** | 1.99 |
 
-**What no modelling change fixes:** résumés carry almost no signal about
-*intent*. The real predictors are behavioural — profile-update velocity,
-recruiter-message response, "open to work", compensation against market band,
-manager change, employer layoffs or funding events. The snapshot pipeline in
-Phase 1 delivers the first of those for free, and it is a bigger lift than
-anything in Phase 3.
+Résumé features are worth **+0.0338 AUC** over simply knowing how long someone
+has been in their seat. That is the honest headline, and it lands inside the
+0.62–0.70 predicted for this problem — against the 0.983 the leaked pipeline
+reported. Anyone quoting >0.85 here from résumé features has a leak.
+
+**AUC understates the case.** At the top of the ranking, where a recruiter
+actually works, the model puts 45.4% movers in the top 5% against the
+baseline's 29.8% — 2.19× the base rate versus 1.44×. The gain is concentrated
+exactly where it gets used, which is why precision@k and not AUC is the
+number to manage against.
+
+Per market, LightGBM minus B3:
+
+| market | test n | base rate | B3 AUC | LGB AUC | Δ |
+| --- | --- | --- | --- | --- | --- |
+| Singapore | 196,297 | 0.2130 | 0.6191 | 0.6613 | **+0.0422** |
+| Japan | 163,066 | 0.1626 | 0.6229 | 0.6610 | **+0.0381** |
+| Other | 716,011 | 0.2190 | 0.6534 | 0.6837 | +0.0303 |
+| Malaysia | 148,056 | 0.1886 | 0.6396 | 0.6668 | +0.0272 |
+| Vietnam | 49,630 | 0.2106 | 0.6394 | 0.6604 | +0.0210 |
+
+Note on Vietnam: on an earlier partial panel (8.4M spells) this cell read
+**−0.0032** — the model appeared to add nothing there. With 3.3× the test data
+it is +0.0210. It was a small-sample artefact, and it is a standing reminder
+that the per-market cells are the thinnest part of this table and should not
+be acted on individually without checking n.
+
+The features help *most* in the two markets where the tenure-only baseline is
+weakest (Japan 0.6229, Singapore 0.6191), which is what you would expect if
+B3's flat hazard curve is exactly what the covariates are correcting.
+
+### What no modelling change fixes
+
+Résumés carry almost no signal about *intent*. The real predictors are
+behavioural — profile-update velocity, recruiter-message response, "open to
+work", compensation against market band, manager change, employer layoffs or
+funding events. The snapshot pipeline in Phase 1 delivers the first of those
+for free once a second capture exists, and it is a bigger lift than anything
+in Phase 3.
