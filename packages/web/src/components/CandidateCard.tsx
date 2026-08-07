@@ -1,253 +1,188 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, Briefcase, Building2, MapPin, GraduationCap } from 'lucide-react';
-import { ExpandableSummary } from './ExpandableSummary';
+import { MapPin, Clock } from 'lucide-react';
 import type { BooleanHit } from '../searchClient';
+import { parseExperienceYears } from '../searchClient';
 
 interface CandidateCardProps {
   hit: BooleanHit;
   idx: number;
+  onOpenProfile: (hit: BooleanHit) => void;
+  onExclude?: (hit: BooleanHit) => void;
+  onSelect?: (hit: BooleanHit) => void;
+  isSelected?: boolean;
 }
 
-export const CandidateCard = memo(({ hit, idx }: CandidateCardProps) => {
-  return (
-    <motion.div
-      className="glass-panel"
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay: idx * 0.05 }}
-      style={{ padding: '1.5rem' }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: '1rem',
-        }}
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '??';
+  return parts
+    .slice(0, 2)
+    .map((p) => p[0])
+    .join('')
+    .toUpperCase();
+}
+
+/** First meaningful line of the experience blob — the "most recent" role. */
+function mostRecentRole(raw?: string): string | null {
+  if (!raw?.trim()) return null;
+  const line = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 2);
+  if (!line) return null;
+  return line.length > 96 ? `${line.slice(0, 96)}…` : line;
+}
+
+function topSkills(raw?: string, max = 5): string[] {
+  if (!raw?.trim()) return [];
+  return Array.from(
+    new Set(
+      raw
+        .split(/[,\n;·|]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1 && s.length < 28),
+    ),
+  ).slice(0, max);
+}
+
+export const CandidateCard = memo(
+  ({ hit, idx, onOpenProfile, onExclude, onSelect, isSelected }: CandidateCardProps) => {
+    const years = useMemo(
+      () => parseExperienceYears(hit.resume_text_excerpt),
+      [hit.resume_text_excerpt],
+    );
+    const skills = useMemo(() => topSkills(hit.skills), [hit.skills]);
+    const recent = useMemo(
+      () => mostRecentRole(hit.resume_text_excerpt),
+      [hit.resume_text_excerpt],
+    );
+
+    // Only shown when an engine genuinely produced a score. The SQL boolean
+    // search has no notion of relevance, so a percentage there would be a
+    // confident number with nothing behind it.
+    const score = hit.pipeline_score ?? hit.tree_score;
+
+    return (
+      <motion.article
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, delay: Math.min(idx, 8) * 0.025 }}
+        className={`flex w-full gap-4 rounded-[8px] border bg-raised p-5 transition-colors ${
+          isSelected ? 'border-accent-line' : 'border-transparent hover:border-line'
+        }`}
       >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#f8fafc' }}>{hit.full_name}</h3>
-            {hit.tree_score !== undefined && (
-              <span
-                style={{
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  color: '#10b981',
-                  padding: '0.2rem 0.5rem',
-                  borderRadius: '1rem',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  border: '1px solid rgba(16, 185, 129, 0.2)',
-                }}
-              >
-                ML Score: {(hit.tree_score * 100).toFixed(1)}%
+        {/* ── Info ─────────────────────────────────────────────────────── */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            {hit.ai_latest_company && (
+              <span className="max-w-full truncate text-[15px] font-bold text-accent">
+                {hit.ai_latest_company}
               </span>
             )}
-            {hit.pipeline_score !== undefined && (
-              <span
-                style={{
-                  background: 'rgba(59, 130, 246, 0.1)',
-                  color: '#60a5fa',
-                  padding: '0.2rem 0.5rem',
-                  borderRadius: '1rem',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  border: '1px solid rgba(59, 130, 246, 0.2)',
-                }}
-              >
-                Rerank Score: {(hit.pipeline_score * 100).toFixed(1)}%
-              </span>
-            )}
+            <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-ink">
+              {hit.ai_latest_role || 'Role not stated'}
+            </span>
           </div>
-          <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            {hit.candidate_email} • {hit.candidate_phone}
-          </div>
-          {hit.resume_drive_view_url && (
-            <a
-              href={hit.resume_drive_view_url}
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: 'inline-block',
-                marginTop: '0.5rem',
-                color: '#60a5fa',
-                textDecoration: 'none',
-                fontSize: '0.85rem',
-                opacity: 0.9,
-              }}
-            >
-              {hit.resume_drive_view_url}
-            </a>
-          )}
-        </div>
-        {hit.resume_drive_view_url && (
-          <a
-            href={hit.resume_drive_view_url}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              background: 'rgba(255,255,255,0.1)',
-              padding: '0.4rem 0.8rem',
-              borderRadius: '0.5rem',
-              fontSize: '0.8rem',
-              color: '#fff',
-              textDecoration: 'none',
-              fontWeight: 500,
-              flexShrink: 0,
-              marginLeft: '1rem',
-            }}
-          >
-            Open Link ↗
-          </a>
-        )}
-      </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '1rem',
-          marginBottom: '1.5rem',
-          paddingBottom: '1.5rem',
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '0.75rem',
-            gridColumn: '1 / -1',
-          }}
-        >
-          <FileText size={18} style={{ color: '#8b5cf6', marginTop: '0.1rem', flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: '0.75rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: 'var(--text-muted)',
-                marginBottom: '0.25rem',
-              }}
-            >
-              Summary
-            </div>
-            <ExpandableSummary text={hit.candidate_summary || ''} maxLength={150} />
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <Briefcase size={18} style={{ color: '#3b82f6', marginTop: '0.1rem' }} />
-          <div>
-            <div
-              style={{
-                fontSize: '0.75rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: 'var(--text-muted)',
-              }}
-            >
-              Latest Role
-            </div>
-            <div style={{ fontWeight: 500 }}>{hit.ai_latest_role}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <Building2 size={18} style={{ color: '#10b981', marginTop: '0.1rem' }} />
-          <div>
-            <div
-              style={{
-                fontSize: '0.75rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: 'var(--text-muted)',
-              }}
-            >
-              Latest Company
-            </div>
-            <div style={{ fontWeight: 500 }}>{hit.ai_latest_company}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <MapPin size={18} style={{ color: '#f59e0b', marginTop: '0.1rem' }} />
-          <div>
-            <div
-              style={{
-                fontSize: '0.75rem',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                color: 'var(--text-muted)',
-              }}
-            >
-              Location
-            </div>
-            <div style={{ fontWeight: 500 }}>{hit.ai_latest_location}</div>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-        <div>
-          <div
-            style={{
-              fontSize: '0.75rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              color: 'var(--text-muted)',
-              marginBottom: '0.5rem',
-            }}
-          >
-            Experience
-          </div>
-          <p
-            style={{
-              fontSize: '0.9rem',
-              lineHeight: '1.6',
-              color: 'rgba(255,255,255,0.85)',
-              margin: 0,
-              whiteSpace: 'pre-line',
-            }}
-          >
-            {hit.resume_text_excerpt}
-          </p>
-        </div>
-        {hit.education && (
-          <div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                marginBottom: '0.5rem',
-              }}
-            >
-              <GraduationCap size={14} style={{ color: '#a78bfa' }} />
-              <div
-                style={{
-                  fontSize: '0.75rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: 'var(--text-muted)',
-                }}
-              >
-                Education
-              </div>
-            </div>
-            <p
-              style={{
-                fontSize: '0.9rem',
-                lineHeight: '1.6',
-                color: 'rgba(255,255,255,0.85)',
-                margin: 0,
-                whiteSpace: 'pre-line',
-              }}
-            >
-              {hit.education}
+          {hit.candidate_summary && (
+            <p className="line-clamp-2 text-[12px] leading-[18px] text-ink-2">
+              {hit.candidate_summary}
             </p>
+          )}
+
+          <span className="text-[11px] text-ink-3">{hit.full_name || 'Unknown candidate'}</span>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-3">
+            {hit.ai_latest_location && (
+              <span className="flex items-center gap-1">
+                <MapPin size={11} aria-hidden="true" />
+                {hit.ai_latest_location}
+              </span>
+            )}
+            {years > 0 && (
+              <span className="flex items-center gap-1">
+                <Clock size={11} aria-hidden="true" />
+                {years.toFixed(years % 1 === 0 ? 0 : 1)} years
+              </span>
+            )}
           </div>
-        )}
-      </div>
-    </motion.div>
-  );
-});
+
+          {recent && (
+            <div className="mt-1.5 flex w-full flex-col gap-0.5 rounded-[4px] bg-input px-3 py-2">
+              <span className="text-[9px] font-semibold uppercase tracking-[1px] text-ink-3">
+                Most recent
+              </span>
+              <span className="truncate text-[12px] font-medium text-ink">{recent}</span>
+            </div>
+          )}
+
+          {skills.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {skills.map((s) => (
+                <span
+                  key={s}
+                  className="rounded-[4px] bg-input px-2.5 py-1 text-[11px] font-medium text-ink-2"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-2 flex flex-wrap gap-3">
+            {onSelect && (
+              <button
+                type="button"
+                onClick={() => onSelect(hit)}
+                aria-pressed={isSelected}
+                className={`cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-medium transition-colors ${
+                  isSelected ? 'text-accent' : 'text-ink-3 hover:text-accent'
+                }`}
+              >
+                {isSelected ? '✓ Selected for outreach' : 'Select for outreach'}
+              </button>
+            )}
+            {onExclude && (
+              <button
+                type="button"
+                onClick={() => onExclude(hit)}
+                className="cursor-pointer border-none bg-transparent p-0 text-[11.5px] font-medium text-ink-3 transition-colors hover:text-danger"
+              >
+                Exclude
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ── Match ────────────────────────────────────────────────────── */}
+        <div className="flex w-[72px] shrink-0 flex-col items-center gap-0.5">
+          {score !== undefined && (
+            <>
+              <span className="text-[18px] font-semibold tabular-nums text-accent">
+                {(score * 100).toFixed(0)}%
+              </span>
+              <span className="text-[9px] tracking-[0.8px] text-ink-3">match</span>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => onOpenProfile(hit)}
+            className="mt-1 cursor-pointer border-none bg-transparent px-0 py-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-accent"
+          >
+            View →
+          </button>
+        </div>
+
+        {/* ── Avatar ───────────────────────────────────────────────────── */}
+        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-[6px] bg-accent-soft">
+          <span className="text-[14px] font-semibold text-accent">
+            {initials(hit.full_name ?? '')}
+          </span>
+        </div>
+      </motion.article>
+    );
+  },
+);
+
+CandidateCard.displayName = 'CandidateCard';

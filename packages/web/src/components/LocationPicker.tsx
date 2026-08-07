@@ -1,27 +1,25 @@
-import { MapPin, X } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, Search } from 'lucide-react';
+import { Field } from './ui';
 
 interface LocationPickerProps {
-  /** Free-text filter over the available list. */
   locationSearch: string;
   onLocationSearchChange: (value: string) => void;
-  /** Full list from the API. */
   availableLocations: string[];
-  /** Memoised subset matching locationSearch. */
   visibleLocations: string[];
   selectedLocations: string[];
   onSelectedLocationsChange: (next: string[]) => void;
 }
 
 /**
- * Step 1 of the search form: choose one or more target regions.
- *
- * Extracted verbatim from App.tsx, where it accounted for 236 lines and 19
- * inline style objects. The markup is unchanged in this step so the move
- * carries no visual risk; styling migrates to a CSS module separately.
- *
- * State stays in App.tsx — this component is presentational and receives
- * everything it needs, which is what makes it renderable in isolation.
+ * The trigger deliberately shares its skin with every other control in the
+ * sidebar. It previously used slate/purple utilities that existed nowhere else,
+ * so the one combobox in the app looked like it came from a different product.
  */
+const TRIGGER =
+  'flex w-full items-center gap-2 rounded-[6px] border bg-input px-3 py-2.5 text-left ' +
+  'text-[13px] transition-colors';
+
 export function LocationPicker({
   locationSearch,
   onLocationSearchChange,
@@ -30,240 +28,165 @@ export function LocationPicker({
   selectedLocations,
   onSelectedLocationsChange,
 }: LocationPickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, []);
+
+  // Escape closes and hands focus back to the trigger, so keyboard users are
+  // not stranded inside a list they cannot dismiss.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen]);
+
+  const allVisibleSelected =
+    visibleLocations.length > 0 && visibleLocations.every((loc) => selectedLocations.includes(loc));
+
+  const summary =
+    selectedLocations.length === 0
+      ? 'Select locations…'
+      : selectedLocations.length === 1
+        ? selectedLocations[0]
+        : `${selectedLocations.length} locations`;
+
   return (
-    <div
-      className="input-group"
-      style={{
-        border: '2px solid rgba(59, 130, 246, 0.5)',
-        padding: '1rem',
-        borderRadius: '0.75rem',
-        background: 'rgba(59, 130, 246, 0.05)',
-        marginBottom: '1.5rem',
-      }}
+    <Field
+      label="Locations"
+      hint={
+        selectedLocations.length > 0
+          ? `${selectedLocations.length} selected`
+          : 'At least one is required to search.'
+      }
     >
-      <label
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          color: '#60a5fa',
-          fontSize: '1.1rem',
-          marginBottom: '1rem',
-        }}
-      >
-        <MapPin size={20} />
-        Step 1: Select Target Locations (Required)
-      </label>
-      <div
-        style={{
-          background: 'rgba(15, 23, 42, 0.5)',
-          border: '1px solid rgba(255,255,255,0.2)',
-          borderRadius: '0.5rem',
-          padding: '0.5rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.4rem',
-        }}
-      >
-        <input
-          type="text"
-          value={locationSearch}
-          onChange={(e) => onLocationSearchChange(e.target.value)}
-          placeholder="Search locations..."
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            borderRadius: '0.25rem',
-            background: 'rgba(255,255,255,0.05)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: '#fff',
-            outline: 'none',
-            fontSize: '0.85rem',
-          }}
-        />
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem' }}>
+      <div ref={containerRef} className="relative w-full">
+        {isOpen ? (
+          <div className={`${TRIGGER} border-accent-line`}>
+            <Search size={13} aria-hidden="true" className="shrink-0 text-ink-3" />
+            <input
+              type="text"
+              autoFocus
+              value={locationSearch}
+              onChange={(e) => onLocationSearchChange(e.target.value)}
+              placeholder="Type to filter…"
+              aria-label="Filter locations"
+              className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-ink outline-none"
+            />
+            <ChevronDown
+              size={14}
+              aria-hidden="true"
+              className="shrink-0 rotate-180 text-ink-3 transition-transform"
+            />
+          </div>
+        ) : (
           <button
+            ref={triggerRef}
             type="button"
-            onClick={() => {
-              const matching = visibleLocations;
-              const toAdd = matching.filter((loc) => !selectedLocations.includes(loc));
-              onSelectedLocationsChange([...selectedLocations, ...toAdd]);
-            }}
-            style={{
-              flex: 1,
-              background: 'rgba(59, 130, 246, 0.2)',
-              border: '1px solid rgba(59, 130, 246, 0.3)',
-              color: '#93c5fd',
-              padding: '0.3rem',
-              borderRadius: '0.25rem',
-              fontSize: '0.8rem',
-              cursor: 'pointer',
-            }}
+            onClick={() => setIsOpen(true)}
+            aria-expanded={false}
+            aria-haspopup="listbox"
+            className={`${TRIGGER} cursor-pointer border-transparent hover:bg-input-hover`}
           >
-            Check All
+            <span
+              className={`min-w-0 flex-1 truncate ${
+                selectedLocations.length > 0 ? 'text-ink' : 'text-ink-3'
+              }`}
+            >
+              {summary}
+            </span>
+            <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-ink-3" />
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              const matching = visibleLocations;
-              onSelectedLocationsChange(selectedLocations.filter((loc) => !matching.includes(loc)));
-            }}
-            style={{
-              flex: 1,
-              background: 'rgba(239, 68, 68, 0.2)',
-              border: '1px solid rgba(239, 68, 68, 0.3)',
-              color: '#fca5a5',
-              padding: '0.3rem',
-              borderRadius: '0.25rem',
-              fontSize: '0.8rem',
-              cursor: 'pointer',
-            }}
-          >
-            Uncheck All
-          </button>
-        </div>
-        <div
-          style={{
-            maxHeight: '150px',
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.4rem',
-          }}
-        >
-          {availableLocations.length === 0 && (
-            <div
-              style={{
-                padding: '0.5rem',
-                color: '#94a3b8',
-                fontSize: '0.85rem',
-                fontStyle: 'italic',
-              }}
-            >
-              No locations found. (Loading...)
-            </div>
-          )}
-          {visibleLocations.map((loc) => (
-            <label
-              key={loc}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                cursor: 'pointer',
-                margin: 0,
-                padding: '0.2rem 0.5rem',
-                borderRadius: '0.25rem',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selectedLocations.includes(loc)}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    onSelectedLocationsChange([...selectedLocations, loc]);
-                  } else {
-                    onSelectedLocationsChange(selectedLocations.filter((l) => l !== loc));
-                  }
-                }}
-                style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
-              />
-              <span style={{ color: '#e2e8f0', fontSize: '0.9rem' }}>{loc}</span>
-            </label>
-          ))}
-        </div>
-        {selectedLocations.length > 0 && (
-          <div
-            style={{
-              marginTop: '0.75rem',
-              paddingTop: '0.5rem',
-              borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '0.5rem',
-              }}
-            >
-              <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: 600 }}>
-                Active Location Filters ({selectedLocations.length}):
+        )}
+
+        {isOpen && (
+          <div className="absolute left-0 top-full z-50 mt-1 flex max-h-[280px] w-full flex-col overflow-hidden rounded-[6px] border border-line bg-raised shadow-lg">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-2 py-1.5">
+              <span className="pl-1 text-[10.5px] text-ink-3">
+                {visibleLocations.length.toLocaleString()} shown
               </span>
-              <button
-                type="button"
-                onClick={() => onSelectedLocationsChange([])}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#fca5a5',
-                  fontSize: '0.75rem',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  padding: 0,
-                }}
-              >
-                Clear All
-              </button>
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '0.4rem',
-                maxHeight: '120px',
-                overflowY: 'auto',
-                padding: '0.2rem',
-              }}
-            >
-              {selectedLocations.map((loc) => (
-                <div
-                  key={loc}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.35rem',
-                    background: 'rgba(59, 130, 246, 0.2)',
-                    border: '1px solid rgba(59, 130, 246, 0.4)',
-                    borderRadius: '1rem',
-                    padding: '0.2rem 0.65rem 0.2rem 0.4rem',
-                    fontSize: '0.8rem',
-                    color: '#e2e8f0',
-                  }}
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  disabled={visibleLocations.length === 0 || allVisibleSelected}
+                  onClick={() =>
+                    onSelectedLocationsChange([
+                      ...selectedLocations,
+                      ...visibleLocations.filter((loc) => !selectedLocations.includes(loc)),
+                    ])
+                  }
+                  className="cursor-pointer rounded-[4px] border-none bg-transparent px-2 py-1 text-[11px] font-medium text-ink-2 transition-colors hover:bg-input hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onSelectedLocationsChange(selectedLocations.filter((l) => l !== loc))
-                    }
-                    title={`Remove ${loc}`}
-                    style={{
-                      background: 'rgba(239, 68, 68, 0.3)',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '16px',
-                      height: '16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                      padding: 0,
-                      color: '#fca5a5',
-                    }}
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedLocations.length === 0}
+                  onClick={() =>
+                    onSelectedLocationsChange(
+                      selectedLocations.filter((loc) => !visibleLocations.includes(loc)),
+                    )
+                  }
+                  className="cursor-pointer rounded-[4px] border-none bg-transparent px-2 py-1 text-[11px] font-medium text-ink-2 transition-colors hover:bg-danger-soft hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-1.5" role="listbox">
+              {visibleLocations.length === 0 && (
+                <p className="px-2 py-3 text-center text-[12px] text-ink-3">
+                  {availableLocations.length === 0 ? 'Loading locations…' : 'No matches'}
+                </p>
+              )}
+              {visibleLocations.map((loc) => {
+                const checked = selectedLocations.includes(loc);
+                return (
+                  <label
+                    key={loc}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-[4px] px-2 py-1.5 transition-colors hover:bg-input"
                   >
-                    <X size={10} />
-                  </button>
-                  <span>{loc}</span>
-                </div>
-              ))}
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        onSelectedLocationsChange(
+                          e.target.checked
+                            ? [...selectedLocations, loc]
+                            : selectedLocations.filter((l) => l !== loc),
+                        )
+                      }
+                      className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-[3px] accent-[var(--c-accent)]"
+                    />
+                    <span
+                      className={`min-w-0 flex-1 truncate text-[12px] ${
+                        checked ? 'text-ink' : 'text-ink-2'
+                      }`}
+                    >
+                      {loc}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
         )}
       </div>
-      <span className="input-helper">
-        You must select at least one location before running a search.
-      </span>
-    </div>
+    </Field>
   );
 }

@@ -4,14 +4,37 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deep Search</title>
-    <link rel="preload" href="/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
-    <style>
-      @font-face {
-        font-family: 'Inter'; src: url('/fonts/inter-var.woff2') format('woff2-variations');
-        font-weight: 300 700; font-display: swap;
-      }
-    </style>
+    <title>OreNoSearch</title>
+
+    <!--
+      The previous head preloaded /fonts/inter-var.woff2 and declared an
+      @font-face against it. That file is not in the repo, so every load fired a
+      request that 404'd and the @font-face never resolved — the app has been
+      running on the system fallback the whole time while paying for a failed
+      round trip. Dropped rather than left dangling; index.css lists Inter first
+      in the stack, so adding the file to public/fonts/ later just works.
+    -->
+
+    <script>
+      // Apply the stored theme before first paint.
+      //
+      // Without this the document renders once with the default theme and then
+      // repaints when React mounts — a white flash on every load for anyone
+      // using dark mode. Deliberately blocking and inline: deferring it is the
+      // whole failure mode. Kept in sync with hooks/useTheme.ts.
+      (function () {
+        try {
+          var choice = localStorage.getItem('ui_theme');
+          if (choice === 'light' || choice === 'dark') {
+            document.documentElement.setAttribute('data-theme', choice);
+          }
+          // 'system' or unset: leave the attribute off so the
+          // prefers-color-scheme block in index.css decides.
+        } catch (e) {
+          /* private mode / storage disabled — fall through to the OS setting */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

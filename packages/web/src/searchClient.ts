@@ -79,6 +79,9 @@ export interface BooleanHit {
   resume_text_excerpt?: string;
   candidate_summary?: string;
   education?: string;
+  /** The SQL projection has always returned this; the type simply omitted it,
+   *  so the field arrived at runtime and was invisible to callers. */
+  skills?: string;
 }
 
 interface DocStore {

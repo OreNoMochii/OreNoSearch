@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -29,6 +30,7 @@ export default defineConfig(({ mode }) => {
     // available to client code without duplicating the file into frontend/.
     envDir: path.resolve(__dirname, '../..'),
     plugins: [
+      tailwindcss(),
       react(),
       {
         name: 'basic-auth',
