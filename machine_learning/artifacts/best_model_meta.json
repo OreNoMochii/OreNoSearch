@@ -1,4 +1,18 @@
 {
+  "_INVALID": true,
+  "_invalid_reason": [
+    "The three c_index figures below are measuring target leakage, not skill.",
+    "The feature list contains tenure_ratio, record_tenure_ratio and",
+    "seniority_stagnation_months. All three are direct functions of",
+    "duration_months (see build_features_v2.py: s_ratio = duration_months /",
+    "s_prior_avg, and s_stagnation seeded with float(stay['duration_months'])),",
+    "and duration_months IS the survival time these models are scored against",
+    "in train_models.py. A model handed the answer will concord with it.",
+    "Do not quote lgb_c_index 0.983 anywhere. An honest 12-month-horizon AUC on",
+    "resume-only features is expected around 0.62-0.70; see docs/flight_risk.md.",
+    "Retained rather than deleted so the leak stays auditable and so the",
+    "rebuild has a before/after reference point."
+  ],
   "best_model_type": "lightgbm",
   "cox_c_index": 0.853563320027855,
   "lgb_c_index": 0.9831447155350272,

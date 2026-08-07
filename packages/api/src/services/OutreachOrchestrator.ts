@@ -6,6 +6,7 @@ import {
   OutreachNotifier,
   ProgressReporter,
   RawCandidateRow,
+  RiskScore,
   RiskScorer,
   ScreenedCandidate,
   ScreeningOptions,
@@ -177,8 +178,27 @@ export class OutreachOrchestrator {
     }
 
     // Score
+    //
+    // A dead or misconfigured scoring service used to abort the campaign right
+    // here — after the expensive part, the LLM screening run above, had already
+    // been paid for and could not be recovered. That is the wrong trade: the
+    // flight-risk score is an annotation on the shortlist, not a precondition
+    // for it. A failure now degrades to an unscored publish.
+    //
+    // This is not hypothetical. ML_SCORING_URL defaults to localhost:8000 and
+    // the production compose points it at the retrieval service, which has no
+    // /score route at all.
     const passedUrls = passed.map((p) => p.profileUrl);
-    const riskData = await this.riskScorer.score(passedUrls, cmd.jdText);
+    let riskData: ReadonlyMap<string, RiskScore> = new Map();
+    try {
+      riskData = await this.riskScorer.score(passedUrls, cmd.jdText);
+    } catch (err) {
+      logWarn('risk_scoring_unavailable', {
+        batchId: cmd.batchId,
+        candidates: passedUrls.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Gather candidates that passed for sinking.
     //

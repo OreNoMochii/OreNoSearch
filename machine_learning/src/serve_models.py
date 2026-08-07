@@ -1,3 +1,31 @@
+"""
+DEV STUB — every score this returns is in-sample. Not fit for production.
+
+`train_model()` fits XGBoost on the whole of candidates_rl_features with no
+split, and `/score` then serves predictions for rows selected out of that same
+frame. Each candidate's own row was in the training set, so the "probability"
+is a memorised label, not a forecast. Held-out performance is unmeasured and
+unmeasurable from this process.
+
+It is also serving a target that does not mean what the endpoint implies:
+label_actual is `current_tenure_months < 10`, i.e. "arrived recently" — a
+candidate three months into a new job, who is among the least likely to move.
+Measured against the project's own is_mover definition the label is wrong on
+61% of its positives. Two of the features (recency_factor, hist_flight_risk)
+are arithmetic on the tenure the label thresholds.
+
+Two response fields are not computed at all: `tenure` is the literal 24, and
+`relevancy` ignores the jd_text it is handed.
+
+Kept because it is the only implementation of the /score contract and the
+rebuild needs something to diff against. Guarded so it cannot be started by
+accident — the API degrades to an unscored publish when this is absent, which
+is the honest outcome. See docs/flight_risk.md.
+"""
+
+import os
+import sys
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import psycopg2
@@ -5,6 +33,14 @@ import pandas as pd
 import numpy as np
 import uvicorn
 import xgboost as xgb
+
+if os.getenv("ALLOW_INSAMPLE_SCORER") != "1":
+    sys.exit(
+        "refusing to start: serve_models.py returns in-sample scores from a "
+        "mislabelled target and is not fit to drive recruiter decisions.\n"
+        "Set ALLOW_INSAMPLE_SCORER=1 to run it anyway (local diffing only).\n"
+        "See the module docstring and docs/flight_risk.md."
+    )
 
 app = FastAPI(title="Advanced ML Scoring Pipeline API")
 
